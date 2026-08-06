@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
+import { apiIsConfigured, apiRequest } from './api'
 
-type View = 'dashboard' | 'topics' | 'videos' | 'uploads'
+const API_MODE = apiIsConfigured()
+
+type View = 'dashboard' | 'topics' | 'videos' | 'uploads' | 'settings' | 'audit'
 type DetailTarget = { view: View; id: string }
 type Status =
   | 'new'
@@ -85,7 +88,37 @@ type AppState = {
   videos: Video[]
   uploads: Upload[]
   analytics: Analytics[]
+  audit: AuditEvent[]
+  readiness: ProviderReadiness | null
+  usage: UsageSummary | null
   automationPaused: boolean
+}
+
+type ProviderReadiness = {
+  llm: boolean
+  youtube: boolean
+  youtubeSearch: boolean
+  dograh: boolean
+  visuals: boolean
+  renderer: boolean
+}
+
+type UsageSummary = {
+  month: string
+  spentUsd: number
+  budgetUsd: number
+  remainingUsd: number
+}
+
+type AuditEvent = {
+  id: string
+  entityType: 'topic' | 'script' | 'video' | 'upload' | 'analytics' | 'job'
+  entityId: string
+  action: string
+  status?: string
+  message?: string
+  metadata: Record<string, unknown>
+  createdAt: string
 }
 
 type IconName =
@@ -120,6 +153,10 @@ type IconName =
   | 'calendar'
   | 'copy'
   | 'bolt'
+  | 'audit'
+  | 'switch'
+  | 'cpu'
+  | 'dot'
 
 function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const common = { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
@@ -155,6 +192,10 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     case 'calendar': return <svg {...common}><rect x="4" y="5" width="16" height="15" rx="2" /><path d="M8 3v4M16 3v4M4 10h16" /></svg>
     case 'copy': return <svg {...common}><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>
     case 'bolt': return <svg {...common} fill="currentColor" stroke="none"><path d="M13.2 2 4 13h6l-.8 9L20 10h-6l-.8-8Z" /></svg>
+    case 'audit': return <svg {...common}><path d="M9 4h6l4 4v11a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" /><path d="M15 4v4h4M10 12h6M10 16h6M10 8h2" /></svg>
+    case 'switch': return <svg {...common}><path d="M3 8h12a4 4 0 0 1 0 8H5" /><path d="M21 16H9a4 4 0 0 1 0-8h10" /><path d="m5 6-2 2 2 2M19 14l2 2-2 2" /></svg>
+    case 'cpu': return <svg {...common}><rect x="5" y="5" width="14" height="14" rx="2" /><rect x="9" y="9" width="6" height="6" rx="1" /><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3" /></svg>
+    case 'dot': return <svg {...common} fill="currentColor" stroke="none"><circle cx="12" cy="12" r="4" /></svg>
   }
 }
 
@@ -186,6 +227,9 @@ const daysFromNow = (days: number, hours = 10) => {
 
 const seedState: AppState = {
   automationPaused: false,
+  audit: [],
+  readiness: { llm: true, youtube: false, youtubeSearch: false, dograh: false, visuals: false, renderer: true },
+  usage: { month: '2026-08', spentUsd: 0, budgetUsd: 5, remainingUsd: 5 },
   topics: [
     { id: 'topic-1', title: 'The hidden city beneath Cappadocia', niche: 'Travel', source: 'trending', status: 'scripted', metrics: { trendScore: 94, searchLift: 38, competition: 'Low' }, rationale: 'Search lift is accelerating and the visual reveal is strong enough to hold attention through the first loop.', createdAt: daysAgo(1, 9) },
     { id: 'topic-2', title: 'Why octopuses edit their own genes', niche: 'Science', source: 'evergreen', status: 'selected', metrics: { trendScore: 78, searchLift: 16, competition: 'Medium' }, rationale: 'Evergreen curiosity topic with a surprising first sentence and three natural visual beats.', createdAt: daysAgo(2, 14) },
@@ -256,7 +300,18 @@ function App() {
   const [uploadFilter, setUploadFilter] = useState('all')
   const [toast, setToast] = useState<string | null>(null)
 
-  useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)) }, [state])
+  const refreshFromApi = async () => {
+    if (!API_MODE) return
+    const remote = await apiRequest<{ topics: Topic[]; scripts: Script[]; videos: Video[]; uploads: Upload[]; analytics: Analytics[]; audit: AuditEvent[] }>('/api/state')
+    const readiness = await apiRequest<{ providers: ProviderReadiness; config: { automationPaused: boolean; llmProvider: string; monthlyAiBudgetUsd: number }; usage: UsageSummary }>('/api/readiness')
+    setState(current => ({ ...current, ...remote, readiness: readiness.providers, usage: readiness.usage, automationPaused: readiness.config.automationPaused }))
+  }
+
+  useEffect(() => { if (!API_MODE) localStorage.setItem(STORAGE_KEY, JSON.stringify(state)) }, [state])
+  useEffect(() => {
+    if (!API_MODE) return
+    refreshFromApi().catch(error => showToast(error instanceof Error ? `API unavailable: ${error.message}` : 'API unavailable'))
+  }, [])
   useEffect(() => {
     if (!toast) return
     const timer = window.setTimeout(() => setToast(null), 3200)
@@ -274,7 +329,15 @@ function App() {
   const videosById = useMemo(() => new Map(state.videos.map(video => [video.id, video])), [state.videos])
   const analyticsByUpload = useMemo(() => new Map(state.analytics.map(item => [item.uploadId, item])), [state.analytics])
 
-  const runManualShort = () => {
+  const runManualShort = async () => {
+    if (API_MODE) {
+      try {
+        await apiRequest('/api/runs/manual', { method: 'POST', body: JSON.stringify({ niche: 'Productivity' }) })
+        await refreshFromApi()
+        showToast('Manual pipeline completed and is ready for review')
+      } catch (error) { showToast(error instanceof Error ? error.message : 'Manual pipeline failed') }
+      return
+    }
     const now = new Date().toISOString()
     const stamp = Date.now()
     const topicId = `topic-manual-${stamp}`
@@ -290,7 +353,15 @@ function App() {
     showToast('Manual Short created and scheduled for tomorrow at 9:00 AM')
   }
 
-  const generateScript = (topic: Topic) => {
+  const generateScript = async (topic: Topic) => {
+    if (API_MODE) {
+      try {
+        const result = await apiRequest<{ provider: string }>('/api/topics/' + topic.id + '/script', { method: 'POST' })
+        await refreshFromApi()
+        showToast(`Script generated with ${result.provider}`)
+      } catch (error) { showToast(error instanceof Error ? error.message : 'Script generation failed') }
+      return
+    }
     const existing = scriptsByTopic.get(topic.id)
     if (existing) {
       updateState(current => ({ ...current, scripts: current.scripts.map(item => item.id === existing.id ? { ...item, status: 'approved' } : item), topics: current.topics.map(item => item.id === topic.id ? { ...item, status: 'scripted' } : item) }))
@@ -303,12 +374,13 @@ function App() {
     showToast('Script generated, approved, and ready for media')
   }
 
-  const rejectTopic = (topicId: string) => { updateState(current => ({ ...current, topics: current.topics.map(topic => topic.id === topicId ? { ...topic, status: 'rejected' } : topic) })); showToast('Topic rejected and removed from the active queue') }
-  const rerenderVideo = (videoId: string) => { updateState(current => ({ ...current, videos: current.videos.map(video => video.id === videoId ? { ...video, status: 'ready', finalVideoUrl: video.finalVideoUrl || 'https://cdn.coverr.co/videos/coverr-aerial-view-of-a-mountain-road-1576/1080p.mp4' } : video) })); showToast('Render retried successfully — video is ready') }
-  const resyncAnalytics = (uploadId: string) => { updateState(current => ({ ...current, analytics: current.analytics.map(item => item.uploadId === uploadId ? { ...item, views: item.views + (item.views ? Math.round(item.views * 0.06) : 4200), likes: item.likes + (item.likes ? Math.round(item.likes * 0.04) : 230), subscribersGained: item.subscribersGained + (item.subscribersGained ? 19 : 28), fetchedAt: new Date().toISOString() } : item) })); showToast('Analytics synced just now') }
-  const reupload = (uploadId: string) => { updateState(current => ({ ...current, uploads: current.uploads.map(upload => upload.id === uploadId ? { ...upload, status: 'scheduled', scheduledAt: daysFromNow(1, 9), youtubeVideoId: undefined, youtubeUrl: undefined } : upload) })); showToast('Upload reset and scheduled for the next available slot') }
-  const toggleAutomation = () => { updateState(current => ({ ...current, automationPaused: !current.automationPaused })); showToast(state.automationPaused ? 'Autopilot resumed' : 'Autopilot paused') }
-  const createTopic = () => {
+  const rejectTopic = async (topicId: string) => { if (API_MODE) { try { await apiRequest(`/api/topics/${topicId}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'rejected' }) }); await refreshFromApi(); showToast('Topic rejected and removed from the active queue') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to reject topic') }; return } updateState(current => ({ ...current, topics: current.topics.map(topic => topic.id === topicId ? { ...topic, status: 'rejected' } : topic) })); showToast('Topic rejected and removed from the active queue') }
+  const rerenderVideo = async (videoId: string) => { if (API_MODE) { try { await apiRequest(`/api/videos/${videoId}/render`, { method: 'POST' }); await refreshFromApi(); showToast('Video rendered successfully with the configured media pipeline') } catch (error) { showToast(error instanceof Error ? error.message : 'Video render failed') }; return } updateState(current => ({ ...current, videos: current.videos.map(video => video.id === videoId ? { ...video, status: 'ready', finalVideoUrl: video.finalVideoUrl || 'https://cdn.coverr.co/videos/coverr-aerial-view-of-a-mountain-road-1576/1080p.mp4' } : video) })); showToast('Render retried successfully — video is ready') }
+  const resyncAnalytics = async (uploadId: string) => { if (API_MODE) { try { await apiRequest('/api/analytics/sync', { method: 'POST' }); await refreshFromApi(); showToast('Analytics synced from YouTube') } catch (error) { showToast(error instanceof Error ? error.message : 'Analytics sync failed') }; return } updateState(current => ({ ...current, analytics: current.analytics.map(item => item.uploadId === uploadId ? { ...item, views: item.views + (item.views ? Math.round(item.views * 0.06) : 4200), likes: item.likes + (item.likes ? Math.round(item.likes * 0.04) : 230), subscribersGained: item.subscribersGained + (item.subscribersGained ? 19 : 28), fetchedAt: new Date().toISOString() } : item) })); showToast('Analytics synced just now') }
+  const reupload = async (uploadId: string) => { if (API_MODE) { try { await apiRequest(`/api/uploads/${uploadId}/retry`, { method: 'POST' }); await refreshFromApi(); showToast('Upload retried successfully') } catch (error) { showToast(error instanceof Error ? error.message : 'Upload retry failed') }; return } updateState(current => ({ ...current, uploads: current.uploads.map(upload => upload.id === uploadId ? { ...upload, status: 'scheduled', scheduledAt: daysFromNow(1, 9), youtubeVideoId: undefined, youtubeUrl: undefined } : upload) })); showToast('Upload reset and scheduled for the next available slot') }
+  const toggleAutomation = async () => { const next = !state.automationPaused; if (API_MODE) { try { await apiRequest('/api/settings/automation', { method: 'PATCH', body: JSON.stringify({ paused: next }) }); await refreshFromApi(); showToast(next ? 'Autopilot paused' : 'Autopilot resumed') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to update automation') }; return } updateState(current => ({ ...current, automationPaused: next })); showToast(next ? 'Autopilot paused' : 'Autopilot resumed') }
+  const createTopic = async () => {
+    if (API_MODE) { try { await apiRequest('/api/topics', { method: 'POST', body: JSON.stringify({ title: 'A new idea from the operator queue', niche: 'Productivity', source: 'manual', rationale: 'Added manually for the next content review.', metrics: { trendScore: 0, searchLift: 0, competition: 'Unscored' } }) }); await refreshFromApi(); showToast('New topic added to the idea queue') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to add topic') }; return }
     const topic: Topic = { id: `topic-${Date.now()}`, title: 'A new idea from the operator queue', niche: 'Productivity', source: 'manual', status: 'new', metrics: { trendScore: 0, searchLift: 0, competition: 'Unscored' }, rationale: 'Added manually for the next content review.', createdAt: new Date().toISOString() }
     updateState(current => ({ ...current, topics: [topic, ...current.topics] }))
     showToast('New topic added to the idea queue')
@@ -324,9 +396,11 @@ function App() {
   const failedUploads = state.uploads.filter(upload => upload.status === 'failed')
 
   const renderPage = () => {
-    if (view === 'dashboard') return <DashboardPage state={state} nextUpload={nextUpload} lastPublished={lastPublished} publishedCount={publishedUploads.length} totalViews={totalViews} avgDuration={avgDuration} subs={subs} failedVideos={failedVideos} failedUploads={failedUploads} scriptsById={scriptsById} onRun={runManualShort} onNavigate={navigate} onOpen={openDetail} />
+    if (view === 'dashboard') return <DashboardPage state={state} nextUpload={nextUpload} lastPublished={lastPublished} publishedCount={publishedUploads.length} totalViews={totalViews} avgDuration={avgDuration} subs={subs} failedVideos={failedVideos} failedUploads={failedUploads} scriptsById={scriptsById} onRun={runManualShort} onNavigate={navigate} onOpen={openDetail} automationPaused={state.automationPaused} onToggleAutomation={toggleAutomation} />
     if (view === 'topics') return <TopicsPage topics={state.topics} scriptsByTopic={scriptsByTopic} filter={topicFilter} niche={topicNiche} onFilter={setTopicFilter} onNiche={setTopicNiche} onOpen={openDetail} onGenerate={generateScript} onReject={rejectTopic} onAdd={createTopic} />
     if (view === 'videos') return <VideosPage videos={state.videos} scriptsById={scriptsById} onOpen={openDetail} onRerender={rerenderVideo} />
+    if (view === 'settings') return <SettingsPage state={state} onRefresh={refreshFromApi} />
+    if (view === 'audit') return <AuditPage state={state} />
     return <UploadsPage uploads={state.uploads} analyticsByUpload={analyticsByUpload} filter={uploadFilter} onFilter={setUploadFilter} onOpen={openDetail} />
   }
 
@@ -339,32 +413,44 @@ function App() {
     {selectedTarget && <DetailPanel view={selectedTarget.view} id={selectedTarget.id} state={state} scriptsByTopic={scriptsByTopic} scriptsById={scriptsById} videosById={videosById} analyticsByUpload={analyticsByUpload} onClose={closeDetail} onGenerate={generateScript} onReject={rejectTopic} onRerender={rerenderVideo} onResync={resyncAnalytics} onReupload={reupload} />}
     {toast && <div className="toast"><div className="toast-icon"><Icon name="check" size={15} /></div><span>{toast}</span><button onClick={() => setToast(null)} aria-label="Dismiss"><Icon name="x" size={15} /></button></div>}
   </div>
-}
-
-function Sidebar({ view, open, automationPaused, onNavigate, onClose, onToggleAutomation }: { view: View; open: boolean; automationPaused: boolean; onNavigate: (view: View) => void; onClose: () => void; onToggleAutomation: () => void }) {
-  const items: { id: View; label: string; icon: IconName; count?: string }[] = [{ id: 'dashboard', label: 'Dashboard', icon: 'grid' }, { id: 'topics', label: 'Topics', icon: 'spark', count: '06' }, { id: 'videos', label: 'Videos', icon: 'film', count: '04' }, { id: 'uploads', label: 'Uploads', icon: 'upload', count: '04' }]
+}function Sidebar({ view, open, automationPaused, onNavigate, onClose, onToggleAutomation }: { view: View; open: boolean; automationPaused: boolean; onNavigate: (view: View) => void; onClose: () => void; onToggleAutomation: () => void }) {
+  const items: { id: View; label: string; icon: IconName; count?: string }[] = [
+    { id: 'dashboard', label: 'Dashboard', icon: 'grid' },
+    { id: 'topics', label: 'Topics', icon: 'spark', count: '06' },
+    { id: 'videos', label: 'Videos', icon: 'film', count: '04' },
+    { id: 'uploads', label: 'Uploads', icon: 'upload', count: '04' },
+    { id: 'audit', label: 'Audit log', icon: 'audit' },
+    { id: 'settings', label: 'Settings', icon: 'settings' },
+  ] 
   return <aside className={`sidebar ${open ? 'sidebar-open' : ''}`}>
     <div className="brand-row"><div className="brand-mark"><Icon name="play" size={14} /></div><span>Shorts <b>Autopilot</b></span><button className="mobile-close" onClick={onClose}><Icon name="x" size={18} /></button></div>
     <div className="workspace-switcher"><div className="workspace-avatar">SA</div><div><span className="eyebrow">Workspace</span><strong>Personal channel</strong></div><Icon name="chevron" size={15} /></div>
     <nav className="nav-list">{items.map(item => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => onNavigate(item.id)}><Icon name={item.icon} size={18} /><span>{item.label}</span>{item.count && <em>{item.count}</em>}</button>)}</nav>
     <div className="sidebar-spacer" />
     <button className={`automation-card ${automationPaused ? 'is-paused' : ''}`} onClick={onToggleAutomation}><div className="automation-card-head"><span className="live-pulse" />{automationPaused ? 'Automation paused' : 'Autopilot is active'}</div><p>{automationPaused ? 'Your next Short will wait until you resume the queue.' : 'Next run checks the queue every morning at 09:00.'}</p><div className="automation-progress"><span style={{ width: automationPaused ? '22%' : '68%' }} /></div><small>{automationPaused ? 'Click to resume automation' : 'Click to pause automation'}</small></button>
-    <div className="sidebar-footer"><button className="nav-item"><Icon name="settings" size={18} /><span>Settings</span></button><button className="nav-item"><Icon name="help" size={18} /><span>Help center</span></button><div className="profile-row"><div className="profile-avatar">JS</div><div><strong>Jeeves Singal</strong><span>Operator</span></div><Icon name="more" size={18} /></div></div>
+    <div className="sidebar-footer"><button className="nav-item" onClick={() => onNavigate('settings')}><Icon name="settings" size={18} /><span>Settings</span></button><button className="nav-item" onClick={() => onNavigate('audit')}><Icon name="audit" size={18} /><span>Audit log</span></button><button className="nav-item"><Icon name="help" size={18} /><span>Help center</span></button><div className="profile-row"><div className="profile-avatar">JS</div><div><strong>Jeeves Singal</strong><span>Operator</span></div><Icon name="more" size={18} /></div></div>
   </aside>
 }
 
 function Topbar({ view, onMenu }: { view: View; onMenu: () => void }) {
-  const meta: Record<View, { title: string; subtitle: string }> = { dashboard: { title: 'Good morning, Jeeves', subtitle: 'Here is what is happening with your channel today.' }, topics: { title: 'Topic pipeline', subtitle: 'Discover, score, and shape the next ideas for your channel.' }, videos: { title: 'Video production', subtitle: 'Monitor your media queue from script to final render.' }, uploads: { title: 'Uploads & analytics', subtitle: 'Keep a pulse on every published and scheduled Short.' } }
+  const meta: Record<View, { title: string; subtitle: string }> = {
+    dashboard: { title: 'Good morning, Jeeves', subtitle: 'Here is what is happening with your channel today.' },
+    topics: { title: 'Topic pipeline', subtitle: 'Discover, score, and shape the next ideas for your channel.' },
+    videos: { title: 'Video production', subtitle: 'Monitor your media queue from script to final render.' },
+    uploads: { title: 'Uploads & analytics', subtitle: 'Keep a pulse on every published and scheduled Short.' },
+    settings: { title: 'Settings & readiness', subtitle: 'Inspect provider configuration, budgets, and pipeline state.' },
+    audit: { title: 'Audit log', subtitle: 'Every status change is recorded so you can recover from any failure.' },
+  }
   return <header className="topbar"><button className="mobile-menu" onClick={onMenu}><Icon name="menu" size={20} /></button><div className="topbar-copy"><h1>{meta[view].title}</h1><p>{meta[view].subtitle}</p></div><div className="topbar-actions"><button className="icon-button"><Icon name="search" size={18} /></button><button className="icon-button notification"><Icon name="alert" size={18} /><span /></button><div className="topbar-divider" /><div className="date-context"><Icon name="calendar" size={16} /><span>{formatDate(new Date().toISOString())}</span></div></div></header>
 }
 
 function SectionHeading({ eyebrow, title, action }: { eyebrow?: string; title: string; action?: React.ReactNode }) { return <div className="section-heading"><div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h2>{title}</h2></div>{action}</div> }
 function MetricCard({ label, value, detail, icon, tone }: { label: string; value: string; detail: string; icon: IconName; tone: string }) { return <div className="metric-card"><div className={`metric-icon ${tone}`}><Icon name={icon} size={19} /></div><div className="metric-body"><span>{label}</span><strong>{value}</strong><small>{detail}</small></div><Icon name="more" size={17} /></div> }
-function ActionButton({ children, onClick, variant = 'secondary', icon }: { children: React.ReactNode; onClick?: () => void; variant?: 'primary' | 'secondary' | 'ghost' | 'danger'; icon?: IconName }) { return <button className={`action-button button-${variant}`} onClick={onClick}>{icon && <Icon name={icon} size={16} />}{children}</button> }
+function ActionButton({ children, onClick, variant = 'secondary', icon, disabled = false }: { children: React.ReactNode; onClick?: () => void; variant?: 'primary' | 'secondary' | 'ghost' | 'danger'; icon?: IconName; disabled?: boolean }) { return <button className={`action-button button-${variant}`} onClick={onClick} disabled={disabled}>{icon && <Icon name={icon} size={16} />}{children}</button> }
 
-function DashboardPage({ state, nextUpload, lastPublished, publishedCount, totalViews, avgDuration, subs, failedVideos, failedUploads, scriptsById, onRun, onNavigate, onOpen }: { state: AppState; nextUpload?: Upload; lastPublished?: Upload; publishedCount: number; totalViews: number; avgDuration: number; subs: number; failedVideos: Video[]; failedUploads: Upload[]; scriptsById: Map<string, Script>; onRun: () => void; onNavigate: (view: View) => void; onOpen: (id: string, targetView?: View) => void }) {
+function DashboardPage({ state, nextUpload, lastPublished, publishedCount, totalViews, avgDuration, subs, failedVideos, failedUploads, scriptsById, onRun, onNavigate, onOpen, automationPaused, onToggleAutomation }: { state: AppState; nextUpload?: Upload; lastPublished?: Upload; publishedCount: number; totalViews: number; avgDuration: number; subs: number; failedVideos: Video[]; failedUploads: Upload[]; scriptsById: Map<string, Script>; onRun: () => void; onNavigate: (view: View) => void; onOpen: (id: string, targetView?: View) => void; automationPaused: boolean; onToggleAutomation: () => void }) {
   return <>
-    <div className="page-intro mobile-page-intro"><div><span className="eyebrow">Channel overview · Last 30 days</span><h2>Keep the streak moving.</h2></div><div className="intro-actions"><ActionButton icon="bolt" variant="primary" onClick={onRun}>Run manual Short</ActionButton><button className="more-button"><Icon name="more" size={19} /></button></div></div>
+    <div className="page-intro mobile-page-intro"><div><span className="eyebrow">Channel overview · Last 30 days</span><h2>Keep the streak moving.</h2></div><div className="intro-actions"><ActionButton icon="bolt" variant="primary" onClick={onRun}>Run manual Short</ActionButton><ActionButton icon={automationPaused ? 'play' : 'pause'} variant="secondary" onClick={onToggleAutomation}>{automationPaused ? 'Resume automation' : 'Pause automation'}</ActionButton><button className="more-button"><Icon name="more" size={19} /></button></div></div>
     <section className="hero-grid"><div className="hero-status-card"><div className="hero-card-top"><div><span className="eyebrow">Publishing cadence</span><h3>Your content engine is on track.</h3></div><span className="active-label"><span className="status-dot" />Live</span></div><div className="hero-card-bottom"><div className="next-slot"><span className="soft-label"><Icon name="clock" size={14} /> Next Short scheduled</span><strong>{nextUpload?.scheduledAt ? formatDate(nextUpload.scheduledAt, true) : 'No shorts scheduled'}</strong><span>{nextUpload ? nextUpload.title : 'Create a Short to fill your queue.'}</span></div><div className="hero-divider" /><div className="last-slot"><span className="soft-label"><Icon name="check" size={14} /> Last published Short</span><strong>{lastPublished?.title || 'No published Shorts yet'}</strong>{lastPublished?.youtubeUrl ? <a href={lastPublished.youtubeUrl} target="_blank" rel="noreferrer">Watch on YouTube <Icon name="external" size={13} /></a> : <span>Publish your first Short to see it here.</span>}</div></div></div><div className="run-card"><div className="run-card-glow" /><span className="eyebrow">Quick action</span><div className="run-icon"><Icon name="spark" size={22} /></div><h3>Make something worth watching.</h3><p>Start a new Short from your manual idea queue.</p><ActionButton icon="arrow" variant="primary" onClick={onRun}>Start a new run</ActionButton><small>Local workflow · no API credits used</small></div></section>
     <section className="metric-grid"><MetricCard label="Shorts published" value={String(publishedCount).padStart(2, '0')} detail="Last 30 days" icon="play" tone="purple" /><MetricCard label="Total views" value={formatNumber(totalViews)} detail="+18.6% vs last period" icon="eye" tone="blue" /><MetricCard label="Avg. view duration" value={formatDuration(avgDuration)} detail="+2.4s vs last period" icon="clock" tone="orange" /><MetricCard label="Subscribers gained" value={`+${formatNumber(subs)}`} detail="From published Shorts" icon="users" tone="green" /></section>
     <div className="dashboard-lower"><section className="panel performance-panel"><SectionHeading eyebrow="Channel health" title="Production overview" action={<button className="text-button" onClick={() => onNavigate('videos')}>View production <Icon name="arrow" size={14} /></button>} /><div className="production-list"><ProductionRow label="Topics selected" value={String(state.topics.filter(topic => ['selected', 'scripted'].includes(topic.status)).length)} total="of 6 ideas" percent={66} color="purple" /><ProductionRow label="Scripts approved" value={String(state.scripts.filter(script => script.status === 'approved').length)} total="of 4 drafts" percent={50} color="blue" /><ProductionRow label="Videos ready" value={String(state.videos.filter(video => video.status === 'ready').length)} total="of 4 renders" percent={50} color="orange" /><ProductionRow label="Uploads published" value={String(state.uploads.filter(upload => upload.status === 'published').length)} total="of 4 uploads" percent={50} color="green" /></div></section><section className="panel alerts-panel"><SectionHeading eyebrow="Needs attention" title="Alerts" action={(failedVideos.length + failedUploads.length) > 0 ? <span className="alert-count">{failedVideos.length + failedUploads.length}</span> : undefined} />{failedVideos.length + failedUploads.length === 0 ? <EmptyState title="Everything looks healthy" description="No failed jobs need your attention right now." /> : <div className="alerts-list">{failedUploads.map(upload => <button className="alert-row" key={upload.id} onClick={() => onOpen(upload.id, 'uploads')}><div className="alert-symbol"><Icon name="upload" size={16} /></div><div><strong>{upload.title}</strong><span>Upload failed · needs a retry</span></div><Icon name="chevron" size={16} /></button>)}{failedVideos.map(video => { const script = scriptsById.get(video.scriptId); return <button className="alert-row" key={video.id} onClick={() => onOpen(video.id, 'videos')}><div className="alert-symbol"><Icon name="film" size={16} /></div><div><strong>{script?.titleSuggestion || 'Untitled video'}</strong><span>Render failed · media action required</span></div><Icon name="chevron" size={16} /></button>})}</div>}</section></div>
@@ -381,15 +467,16 @@ function TopicsPage({ topics, scriptsByTopic, filter, niche, onFilter, onNiche, 
 
 function VideosPage({ videos, scriptsById, onOpen, onRerender }: { videos: Video[]; scriptsById: Map<string, Script>; onOpen: (id: string) => void; onRerender: (id: string) => void }) {
   const sorted = [...videos].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-  return <><PageIntro eyebrow="Media operations" title="Video production" description="Every render, asset, and voice track in one place." action={<ActionButton icon="plus" variant="primary" onClick={() => { const target = sorted.find(video => video.status === 'failed')?.id || sorted[0]?.id; if (target) onRerender(target) }}>New render</ActionButton>} /><section className="panel list-panel"><div className="list-toolbar"><div className="toolbar-title"><strong>Production queue</strong><span>{videos.length} videos · sorted by newest</span></div><div className="queue-summary"><span><i className="summary-dot green" /> {videos.filter(video => video.status === 'ready').length} ready</span><span><i className="summary-dot yellow" /> {videos.filter(video => video.status === 'rendering').length} in progress</span></div></div><div className="data-table videos-table"><div className="table-head"><span>Linked script</span><span>Assets</span><span>Status</span><span>Created</span><span /></div>{sorted.map(video => { const script = scriptsById.get(video.scriptId); return <button className="table-row" key={video.id} onClick={() => onOpen(video.id)}><div className="table-title"><div className="video-thumb">{video.thumbnailUrl ? <img src={video.thumbnailUrl} alt="" /> : <Icon name="film" size={17} />}</div><div><strong>{script?.titleSuggestion || 'Untitled script'}</strong><span>{script ? `${script.durationSec}s script` : 'Script unavailable'}</span></div></div><span className="asset-count"><Icon name="image" size={14} /> {video.visualAssets.length} visual{video.visualAssets.length === 1 ? '' : 's'}</span><StatusBadge status={video.status} /><span className="muted">{formatDate(video.createdAt, true)}</span><Icon name="chevron" size={16} /></button> })}</div></section></>
+  const renderTarget = sorted.find(video => video.status === 'failed')?.id || sorted[0]?.id
+  return <><PageIntro eyebrow="Media operations" title="Video production" description="Every render, asset, and voice track in one place." action={<ActionButton icon="plus" variant="primary" disabled={!renderTarget} onClick={() => { if (renderTarget) onRerender(renderTarget) }}>{renderTarget ? 'New render' : 'No videos yet'}</ActionButton>} /><section className="panel list-panel"><div className="list-toolbar"><div className="toolbar-title"><strong>Production queue</strong><span>{videos.length} videos · sorted by newest</span></div><div className="queue-summary"><span><i className="summary-dot green" /> {videos.filter(video => video.status === 'ready').length} ready</span><span><i className="summary-dot yellow" /> {videos.filter(video => video.status === 'rendering').length} in progress</span></div></div><div className="data-table videos-table"><div className="table-head"><span>Linked script</span><span>Assets</span><span>Status</span><span>Created</span><span /></div>{sorted.map(video => { const script = scriptsById.get(video.scriptId); return <button className="table-row" key={video.id} onClick={() => onOpen(video.id)}><div className="table-title"><div className="video-thumb">{video.thumbnailUrl ? <img src={video.thumbnailUrl} alt="" /> : <Icon name="film" size={17} />}</div><div><strong>{script?.titleSuggestion || 'Untitled script'}</strong><span>{script ? `${script.durationSec}s script` : 'Script unavailable'}</span></div></div><span className="asset-count"><Icon name="image" size={14} /> {video.visualAssets.length} visual{video.visualAssets.length === 1 ? '' : 's'}</span><StatusBadge status={video.status} /><span className="muted">{formatDate(video.createdAt, true)}</span><Icon name="chevron" size={16} /></button> })}</div></section></>
 }
 
 function UploadsPage({ uploads, analyticsByUpload, filter, onFilter, onOpen }: { uploads: Upload[]; analyticsByUpload: Map<string, Analytics>; filter: string; onFilter: (value: string) => void; onOpen: (id: string, targetView?: View) => void }) {
   const sorted = uploads.filter(upload => filter === 'all' || upload.status === filter).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-  return <><PageIntro eyebrow="Publishing workspace" title="Uploads & analytics" description="Manage your publishing queue and learn what is resonating." action={<ActionButton icon="refresh" variant="secondary" onClick={() => window.location.reload()}>Refresh data</ActionButton>} /><section className="panel list-panel"><div className="list-toolbar"><div className="toolbar-title"><strong>All uploads</strong><span>{sorted.length} records · latest first</span></div><div className="toolbar-filters"><label className="select-wrap"><Icon name="filter" size={15} /><select value={filter} onChange={event => onFilter(event.target.value)}><option value="all">All statuses</option><option value="published">Published</option><option value="scheduled">Scheduled</option><option value="pending">Pending</option><option value="failed">Failed</option></select></label></div></div><div className="data-table uploads-table"><div className="table-head"><span>Short</span><span>Link</span><span>Status</span><span>Scheduled at</span><span>Views</span><span /></div>{sorted.length === 0 ? <EmptyState title="No uploads found" description="There are no uploads with this status yet." /> : sorted.map(upload => { const analytics = analyticsByUpload.get(upload.id); return <button className="table-row" key={upload.id} onClick={() => onOpen(upload.id, 'uploads')}><div className="table-title"><div className="video-thumb upload-thumb">{upload.thumbnailUrl ? <img src={upload.thumbnailUrl} alt="" /> : <Icon name="image" size={17} />}</div><div><strong>{upload.title}</strong><span>{upload.tags.slice(0, 2).join(' · ')}</span></div></div>{upload.youtubeUrl ? <span className="youtube-link" role="link" tabIndex={0} onClick={event => { event.stopPropagation(); window.open(upload.youtubeUrl, '_blank', 'noopener,noreferrer') }} onKeyDown={event => { if (event.key === 'Enter') { event.stopPropagation(); window.open(upload.youtubeUrl, '_blank', 'noopener,noreferrer') } }}><span className="youtube-mark">▶</span> YouTube <Icon name="external" size={12} /></span> : <span className="muted">Not published</span>}<StatusBadge status={upload.status} /><span className="muted">{formatDate(upload.scheduledAt, true)}</span><strong className="row-number">{analytics?.views ? formatNumber(analytics.views) : '—'}</strong><Icon name="chevron" size={16} /></button> })}</div></section></>
+  return <><PageIntro eyebrow="Publishing workspace" title="Uploads & analytics" description="Manage your publishing queue and learn what is resonating." action={<ActionButton icon="refresh" variant="secondary" onClick={() => window.location.reload()}>Refresh data</ActionButton>} /><section className="panel list-panel"><div className="list-toolbar"><div className="toolbar-title"><strong>All uploads</strong><span>{sorted.length} records · latest first</span></div><div className="toolbar-filters"><label className="select-wrap"><Icon name="filter" size={15} /><select value={filter} onChange={event => onFilter(event.target.value)}><option value="all">All statuses</option><option value="published">Published</option><option value="scheduled">Scheduled</option><option value="pending">Pending</option><option value="failed">Failed</option></select></label></div></div><div className="data-table uploads-table"><div className="table-head"><span>Short</span><span>Link</span><span>Status</span><span>Scheduled at</span><span>Views</span><span /></div>{sorted.length === 0 ? <EmptyState title="No uploads found" description="There are no uploads with this status yet." /> : sorted.map(upload => { const analytics = analyticsByUpload.get(upload.id); return <div className="table-row upload-row" key={upload.id} role="button" tabIndex={0} onClick={() => onOpen(upload.id, 'uploads')} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') onOpen(upload.id, 'uploads') }}><div className="table-title"><div className="video-thumb upload-thumb">{upload.thumbnailUrl ? <img src={upload.thumbnailUrl} alt="" /> : <Icon name="image" size={17} />}</div><div><strong>{upload.title}</strong><span>{upload.tags.slice(0, 2).join(' · ')}</span></div></div>{upload.youtubeUrl ? <a className="youtube-link" href={upload.youtubeUrl} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}><span className="youtube-mark">▶</span> YouTube <Icon name="external" size={12} /></a> : <span className="muted">Not published</span>}<StatusBadge status={upload.status} /><span className="muted">{formatDate(upload.scheduledAt, true)}</span><strong className="row-number">{analytics?.views ? formatNumber(analytics.views) : '—'}</strong><Icon name="chevron" size={16} /></div> })}</div></section></>
 }
 
-function PageIntro({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action: React.ReactNode }) { return <div className="page-intro"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div><div className="intro-actions">{action}<button className="more-button"><Icon name="more" size={19} /></button></div></div> }
+function PageIntro({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) { return <div className="page-intro"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div><div className="intro-actions">{action}<button className="more-button"><Icon name="more" size={19} /></button></div></div> }
 
 function DetailPanel({ view, id, state, scriptsByTopic, scriptsById, videosById, analyticsByUpload, onClose, onGenerate, onReject, onRerender, onResync, onReupload }: { view: View; id: string; state: AppState; scriptsByTopic: Map<string, Script>; scriptsById: Map<string, Script>; videosById: Map<string, Video>; analyticsByUpload: Map<string, Analytics>; onClose: () => void; onGenerate: (topic: Topic) => void; onReject: (id: string) => void; onRerender: (id: string) => void; onResync: (id: string) => void; onReupload: (id: string) => void }) {
   const topic = view === 'topics' ? state.topics.find(item => item.id === id) : undefined
@@ -405,5 +492,93 @@ function TopicDetail({ topic, script, onGenerate, onReject }: { topic: Topic; sc
 function VideoDetail({ video, script, onRerender }: { video: Video; script?: Script; onRerender: (id: string) => void }) { return <div className="detail-body"><div className="detail-status-row"><StatusBadge status={video.status} /><span className="muted">Created {formatDate(video.createdAt, true)}</span></div><div className="detail-section"><span className="detail-label">Source script</span><div className="script-quote"><span>“</span>{script?.text || 'The linked script is not available.'}</div></div>{video.audioUrl && <div className="media-block"><span className="detail-label"><Icon name="audio" size={14} /> Voiceover</span><audio controls src={video.audioUrl} /></div>}<div className="media-block"><span className="detail-label"><Icon name="image" size={14} /> Visual assets · {video.visualAssets.length}</span>{video.visualAssets.length ? <div className="asset-grid">{video.visualAssets.map(asset => <img key={asset} src={asset} alt="Visual asset" />)}</div> : <div className="media-empty">No visual assets attached yet.</div>}</div>{video.finalVideoUrl && <div className="media-block"><span className="detail-label"><Icon name="video" size={14} /> Final video</span><video className="video-preview" controls poster={video.thumbnailUrl} src={video.finalVideoUrl} /></div>}<DetailActions><ActionButton icon="redo" variant="primary" onClick={() => onRerender(video.id)}>{video.status === 'failed' ? 'Retry render' : 'Re-render video'}</ActionButton></DetailActions></div> }
 function UploadDetail({ upload, analytics, onResync, onReupload }: { upload: Upload; analytics?: Analytics; onResync: (id: string) => void; onReupload: (id: string) => void }) { return <div className="detail-body"><div className="detail-status-row"><StatusBadge status={upload.status} /><span className="muted">Created {formatDate(upload.createdAt, true)}</span></div>{upload.thumbnailUrl && <img className="detail-thumbnail" src={upload.thumbnailUrl} alt="Upload thumbnail" />}<div className="detail-meta-grid"><DetailMeta label="Scheduled at" value={formatDate(upload.scheduledAt, true)} /><DetailMeta label="YouTube ID" value={upload.youtubeVideoId || 'Not published'} /></div><div className="detail-section"><span className="detail-label">Description</span><p className="detail-copy">{upload.description || 'No description added.'}</p></div><div className="tag-list">{upload.tags.map(tag => <span key={tag}>#{tag}</span>)}</div>{upload.youtubeUrl && <a className="youtube-detail-link" href={upload.youtubeUrl} target="_blank" rel="noreferrer">Open on YouTube <Icon name="external" size={14} /></a>}<div className="analytics-card"><div className="analytics-card-head"><div><span className="eyebrow">Latest snapshot</span><strong>Performance overview</strong></div><span className="muted">{formatDate(analytics?.fetchedAt)}</span></div><div className="analytics-grid"><AnalyticsValue label="Views" value={analytics?.views ? formatNumber(analytics.views) : '—'} /><AnalyticsValue label="Avg. duration" value={analytics?.averageViewDurationSec ? `${analytics.averageViewDurationSec}s` : '—'} /><AnalyticsValue label="Swipe away" value={analytics?.swipeAwayRate ? `${analytics.swipeAwayRate}%` : '—'} /><AnalyticsValue label="Likes" value={analytics?.likes ? formatNumber(analytics.likes) : '—'} /><AnalyticsValue label="Comments" value={analytics?.comments ? formatNumber(analytics.comments) : '—'} /><AnalyticsValue label="Subs gained" value={analytics?.subscribersGained ? `+${formatNumber(analytics.subscribersGained)}` : '—'} /></div></div><DetailActions><ActionButton icon="refresh" variant="secondary" onClick={() => onResync(upload.id)}>Resync analytics</ActionButton>{upload.status === 'failed' && <ActionButton icon="redo" variant="primary" onClick={() => onReupload(upload.id)}>Re-upload</ActionButton>}</DetailActions></div> }
 function AnalyticsValue({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div> }
+
+function SettingsPage({ state, onRefresh }: { state: AppState; onRefresh: () => Promise<void> }) {
+  const readiness: ProviderReadiness = state.readiness ?? { llm: true, youtube: false, youtubeSearch: false, dograh: false, visuals: false, renderer: true }
+  const usage: UsageSummary = state.usage ?? { month: new Date().toISOString().slice(0, 7), spentUsd: 0, budgetUsd: 5, remainingUsd: 5 }
+  const providers: Array<{ key: keyof ProviderReadiness; name: string; description: string; needed: string[] }> = [
+    { key: 'llm', name: 'Script generation', description: 'OpenAI or Gemini structured script JSON. Local deterministic fallback is always available.', needed: ['OPENAI_API_KEY or GEMINI_API_KEY (optional)'] },
+    { key: 'youtubeSearch', name: 'Topic discovery', description: 'YouTube Data API v3 search for trending Shorts topics.', needed: ['YOUTUBE_API_KEY'] },
+    { key: 'youtube', name: 'YouTube publishing', description: 'OAuth refresh-token flow + multipart upload + scheduled publish metadata.', needed: ['YOUTUBE_CLIENT_ID', 'YOUTUBE_CLIENT_SECRET', 'YOUTUBE_REFRESH_TOKEN'] },
+    { key: 'dograh', name: 'Voiceover', description: 'Speaches/OpenAI-compatible TTS endpoint, includable as Dograh orchestration.', needed: ['SPEACHES_API_URL (recommended) or DOGRAH_API_URL'] },
+    { key: 'visuals', name: 'Visual assets', description: 'Pexels imagery search. Local SVG and the built-in dependency-free PNG fallback work without keys.', needed: ['PEXELS_API_KEY (optional)'] },
+    { key: 'renderer', name: 'Local renderer', description: 'FFmpeg with vertical 9:16 crop, free when ffmpeg is on PATH (Docker image installs it).', needed: ['ffmpeg binary'] },
+  ]
+  const spentPercent = Math.min(100, Math.round((usage.spentUsd / Math.max(0.01, usage.budgetUsd)) * 100))
+  return <><PageIntro eyebrow="Operator workspace" title="Settings & readiness" description="Inspect provider readiness, budget, and the smallest set of secrets you still need to add." action={API_MODE ? <ActionButton icon="refresh" variant="secondary" onClick={() => onRefresh().then(() => undefined)}>Sync readiness</ActionButton> : undefined} />
+    <section className="provider-grid">
+      {providers.map(provider => <article key={provider.key} className={`provider-card ${readiness[provider.key] ? 'is-ready' : 'is-missing'}`}>
+        <div className="provider-head"><span className={`status-dot ${readiness[provider.key] ? 'status-dot-green' : 'status-dot-red'}`} />{provider.name}</div>
+        <p className="provider-desc">{provider.description}</p>
+        <div className="provider-meta"><span>{readiness[provider.key] ? 'Ready (live or fallback)' : 'Awaiting credential'}</span><span>Needs: {provider.needed.join(', ')}</span></div>
+      </article>)}
+    </section>
+    <section className="panel budget-panel">
+      <SectionHeading eyebrow="Cost guardrail" title="Monthly AI budget" action={<span className="muted">Resets on the 1st of every month</span>} />
+      <div className="budget-row">
+        <div className="budget-bar"><span className="budget-bar-fill" style={{ width: `${spentPercent}%`, background: spentPercent > 80 ? 'var(--red)' : spentPercent > 60 ? 'var(--yellow)' : 'var(--green)' }} /></div>
+        <div className="budget-figures">
+          <div><span>Spent</span><strong>${usage.spentUsd.toFixed(2)}</strong></div>
+          <div><span>Budget</span><strong>${usage.budgetUsd.toFixed(2)}</strong></div>
+          <div><span>Remaining</span><strong>${usage.remainingUsd.toFixed(2)}</strong></div>
+          <div><span>Month</span><strong>{usage.month}</strong></div>
+        </div>
+      </div>
+      <p className="muted">The autopilot circuit-breaker pauses automation the moment a single spend would exceed the configured budget. Configure with <code>MONTHLY_AI_BUDGET_USD</code> in <code>.env</code>.</p>
+    </section>
+    <section className="panel runbook-panel">
+      <SectionHeading eyebrow="Minimal-cost runbook" title="Operator setup checklist" />
+      <ol className="runbook-list">
+        <li><strong>Activate providers only when you need them.</strong> The local fallback completes the entire pipeline with $0 spend and FFmpeg on PATH.</li>
+        <li><strong>Paste the smallest set of env vars</strong> from <code>sessions/.env.example</code> into your <code>.env</code>. Never copy provider keys into a <code>VITE_</code> variable — they leak to the browser.</li>
+        <li><strong>Activate YouTube last.</strong> Until OAuth is configured, the API marks uploads as <em>scheduled</em> with idempotent keys; retries do not duplicate work.</li>
+        <li><strong>Back up the SQLite database and media volume daily.</strong> Mount the <code>data/</code> folder on a persistent volume when running under Docker Compose.</li>
+        <li><strong>Run the verification trio</strong> after every deploy: <code>npm run build &amp;&amp; npm test &amp;&amp; npm run api:smoke</code>.</li>
+      </ol>
+    </section>
+  </>
+}
+
+function AuditPage({ state }: { state: AppState }) {
+  if (!API_MODE) {
+    return <>
+      <PageIntro eyebrow="Audit log" title="Backend required" description="The structured audit stream is produced by the API. Connect the frontend with VITE_API_URL to inspect the most recent 100 events." action={<ActionButton icon="bolt" variant="primary" onClick={() => window.location.reload()}>Reload after backend config</ActionButton>} />
+      <section className="panel list-panel"><div className="list-toolbar"><div className="toolbar-title"><strong>Backend offline</strong><span>No API_MODE configured</span></div></div><EmptyState title="Backend not connected" description="Reconnect by setting VITE_API_URL and reloading the dashboard." /></section>
+    </>
+  }
+  const events = [...state.audit].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  const totalCreated = events.filter(event => event.action === 'created').length
+  const totalStatus = events.filter(event => event.action === 'status_changed').length
+  const totalFailed = events.filter(event => event.action === 'failed').length
+  return <>
+    <PageIntro eyebrow="Live journal" title="Audit log" description="The most recent 100 events from the SQLite audit table. Use it to trace any failed render or upload without grepping server logs." />
+    <section className="panel list-panel">
+      <div className="list-toolbar">
+        <div className="toolbar-title"><strong>Recent events</strong><span>{events.length} of 100 tracked · newest first</span></div>
+        <div className="queue-summary">
+          <span><i className="summary-dot green" /> {totalCreated} created</span>
+          <span><i className="summary-dot yellow" /> {totalStatus} status changes</span>
+          <span><i className="summary-dot red" /> {totalFailed} failures</span>
+        </div>
+      </div>
+      {events.length === 0 ? (
+        <EmptyState title="No events yet" description="Run a manual pipeline or wait for the scheduler to log its first audit event." />
+      ) : (
+        <div className="data-table audit-table">
+          <div className="table-head"><span>When</span><span>Entity</span><span>Action</span><span>Status</span><span>Detail</span></div>
+          {events.map(event => <div className="table-row audit-row" key={event.id}>
+            <span className="muted">{formatDate(event.createdAt, true)}</span>
+            <span className="entity-chip">{event.entityType}</span>
+            <span className="action-chip">{event.action}</span>
+            {event.status ? <StatusBadge status={event.status as Status} /> : <span className="muted">—</span>}
+            <span className="muted">{event.message || truncate(JSON.stringify(event.metadata), 80)}</span>
+          </div>)}
+        </div>
+      )}
+    </section>
+  </>
+}
+
+function truncate(value: string, length: number) { return value.length > length ? `${value.slice(0, length)}…` : value }
 
 export default App

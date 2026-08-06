@@ -1,22 +1,36 @@
 {
   "name": "shorts-autopilot",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "dev:api": "tsx server/index.ts",
+    "dev:all": "concurrently -k \"npm:dev:api\" \"npm:dev\"",
+    "build": "tsc -b && vite build && tsc -p tsconfig.server.json",
+    "preview": "vite preview",
+    "test": "vitest run --exclude tests/workflow.test.ts",
+    "test:full": "vitest run",
+    "test:watch": "vitest",
+    "db:seed": "tsx scripts/seed.ts",
+    "api:smoke": "tsx scripts/smoke.ts",
+    "pipeline:smoke": "tsx scripts/pipeline-smoke.ts",
+    "docker:validate": "tsx scripts/docker-validate.ts"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "typescript": "latest",
-    "vite": "latest",
+    "better-sqlite3": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "typescript": "latest",
+    "vite": "latest"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "latest",
     "@types/react": "latest",
-    "@types/react-dom": "latest"
+    "@types/react-dom": "latest",
+    "concurrently": "latest",
+    "tsx": "latest",
+    "vitest": "latest"
   }
 }
