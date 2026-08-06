@@ -96,6 +96,10 @@ type AppState = {
 
 type ProviderReadiness = {
   llm: boolean
+  llmProvider?: string
+  groq?: boolean
+  openrouter?: boolean
+  nvidia?: boolean
   youtube: boolean
   youtubeSearch: boolean
   dograh: boolean
@@ -493,28 +497,83 @@ function VideoDetail({ video, script, onRerender }: { video: Video; script?: Scr
 function UploadDetail({ upload, analytics, onResync, onReupload }: { upload: Upload; analytics?: Analytics; onResync: (id: string) => void; onReupload: (id: string) => void }) { return <div className="detail-body"><div className="detail-status-row"><StatusBadge status={upload.status} /><span className="muted">Created {formatDate(upload.createdAt, true)}</span></div>{upload.thumbnailUrl && <img className="detail-thumbnail" src={upload.thumbnailUrl} alt="Upload thumbnail" />}<div className="detail-meta-grid"><DetailMeta label="Scheduled at" value={formatDate(upload.scheduledAt, true)} /><DetailMeta label="YouTube ID" value={upload.youtubeVideoId || 'Not published'} /></div><div className="detail-section"><span className="detail-label">Description</span><p className="detail-copy">{upload.description || 'No description added.'}</p></div><div className="tag-list">{upload.tags.map(tag => <span key={tag}>#{tag}</span>)}</div>{upload.youtubeUrl && <a className="youtube-detail-link" href={upload.youtubeUrl} target="_blank" rel="noreferrer">Open on YouTube <Icon name="external" size={14} /></a>}<div className="analytics-card"><div className="analytics-card-head"><div><span className="eyebrow">Latest snapshot</span><strong>Performance overview</strong></div><span className="muted">{formatDate(analytics?.fetchedAt)}</span></div><div className="analytics-grid"><AnalyticsValue label="Views" value={analytics?.views ? formatNumber(analytics.views) : '—'} /><AnalyticsValue label="Avg. duration" value={analytics?.averageViewDurationSec ? `${analytics.averageViewDurationSec}s` : '—'} /><AnalyticsValue label="Swipe away" value={analytics?.swipeAwayRate ? `${analytics.swipeAwayRate}%` : '—'} /><AnalyticsValue label="Likes" value={analytics?.likes ? formatNumber(analytics.likes) : '—'} /><AnalyticsValue label="Comments" value={analytics?.comments ? formatNumber(analytics.comments) : '—'} /><AnalyticsValue label="Subs gained" value={analytics?.subscribersGained ? `+${formatNumber(analytics.subscribersGained)}` : '—'} /></div></div><DetailActions><ActionButton icon="refresh" variant="secondary" onClick={() => onResync(upload.id)}>Resync analytics</ActionButton>{upload.status === 'failed' && <ActionButton icon="redo" variant="primary" onClick={() => onReupload(upload.id)}>Re-upload</ActionButton>}</DetailActions></div> }
 function AnalyticsValue({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div> }
 
+type LlmProviderCard = {
+  id: string
+  name: string
+  badge: 'FREE' | 'LOW-COST' | 'PAID'
+  model: string
+  description: string
+  signupUrl: string
+  envVar: string
+}
+
+const LLM_PROVIDER_CARDS: LlmProviderCard[] = [
+  { id: 'local', name: 'Local fallback', badge: 'FREE', model: 'deterministic', description: 'Zero-cost built-in script generator. Always available without any API key.', signupUrl: '', envVar: 'LLM_PROVIDER=local' },
+  { id: 'groq', name: 'Groq', badge: 'FREE', model: 'llama-3.3-70b-versatile', description: '14,400 free requests/day. Llama 70B quality at zero cost. Fastest inference on the market.', signupUrl: 'https://console.groq.com', envVar: 'GROQ_API_KEY' },
+  { id: 'openrouter', name: 'OpenRouter', badge: 'FREE', model: 'llama-3.1-8b-instruct:free', description: 'Free-tier models (Llama, Mistral, Gemma). Append ":free" to any model for $0.', signupUrl: 'https://openrouter.ai', envVar: 'OPENROUTER_API_KEY' },
+  { id: 'nvidia', name: 'NVIDIA NIM', badge: 'FREE', model: 'llama-3.1-70b-instruct', description: 'Free API credits on signup. Enterprise-grade Llama 70B + Mixtral on NVIDIA infrastructure.', signupUrl: 'https://build.nvidia.com', envVar: 'NVIDIA_API_KEY' },
+  { id: 'gemini', name: 'Gemini Flash', badge: 'LOW-COST', model: 'gemini-2.5-flash', description: '~$0.002/script. Google DeepMind — best reasoning at lowest price among paid tiers.', signupUrl: 'https://aistudio.google.com', envVar: 'GEMINI_API_KEY' },
+  { id: 'openai', name: 'OpenAI GPT-4o-mini', badge: 'PAID', model: 'gpt-4o-mini', description: '~$0.01/script. Structured JSON output, strong quality. Uses your OPENAI_API_KEY.', signupUrl: 'https://platform.openai.com', envVar: 'OPENAI_API_KEY' },
+]
+
 function SettingsPage({ state, onRefresh }: { state: AppState; onRefresh: () => Promise<void> }) {
   const readiness: ProviderReadiness = state.readiness ?? { llm: true, youtube: false, youtubeSearch: false, dograh: false, visuals: false, renderer: true }
   const usage: UsageSummary = state.usage ?? { month: new Date().toISOString().slice(0, 7), spentUsd: 0, budgetUsd: 5, remainingUsd: 5 }
-  const providers: Array<{ key: keyof ProviderReadiness; name: string; description: string; needed: string[] }> = [
-    { key: 'llm', name: 'Script generation', description: 'OpenAI or Gemini structured script JSON. Local deterministic fallback is always available.', needed: ['OPENAI_API_KEY or GEMINI_API_KEY (optional)'] },
-    { key: 'youtubeSearch', name: 'Topic discovery', description: 'YouTube Data API v3 search for trending Shorts topics.', needed: ['YOUTUBE_API_KEY'] },
-    { key: 'youtube', name: 'YouTube publishing', description: 'OAuth refresh-token flow + multipart upload + scheduled publish metadata.', needed: ['YOUTUBE_CLIENT_ID', 'YOUTUBE_CLIENT_SECRET', 'YOUTUBE_REFRESH_TOKEN'] },
-    { key: 'dograh', name: 'Voiceover', description: 'Speaches/OpenAI-compatible TTS endpoint, includable as Dograh orchestration.', needed: ['SPEACHES_API_URL (recommended) or DOGRAH_API_URL'] },
-    { key: 'visuals', name: 'Visual assets', description: 'Pexels imagery search. Local SVG and the built-in dependency-free PNG fallback work without keys.', needed: ['PEXELS_API_KEY (optional)'] },
-    { key: 'renderer', name: 'Local renderer', description: 'FFmpeg with vertical 9:16 crop, free when ffmpeg is on PATH (Docker image installs it).', needed: ['ffmpeg binary'] },
+  const activeLlmProvider = readiness.llmProvider || 'local'
+
+  const infraProviders: Array<{ key: keyof ProviderReadiness; name: string; description: string; needed: string; isFree?: boolean }> = [
+    { key: 'youtubeSearch', name: 'Topic discovery', description: 'YouTube Data API v3 — trending Shorts topics.', needed: 'YOUTUBE_API_KEY (free 10k quota/day)' },
+    { key: 'youtube', name: 'YouTube publishing', description: 'OAuth refresh-token upload + scheduled publish.', needed: 'YOUTUBE_CLIENT_ID / SECRET / REFRESH_TOKEN' },
+    { key: 'dograh', name: 'Voiceover (TTS)', description: 'OpenAI-compatible speech endpoint (Speaches / Dograh).', needed: 'SPEACHES_API_URL', isFree: true },
+    { key: 'visuals', name: 'Visual assets', description: 'Pexels image search. Local PNG fallback works without key.', needed: 'PEXELS_API_KEY (free 200 req/hr)', isFree: true },
+    { key: 'renderer', name: 'Local renderer', description: 'FFmpeg 9:16 vertical crop. Preinstalled in Docker image.', needed: 'ffmpeg on PATH (free)', isFree: true },
   ]
+
   const spentPercent = Math.min(100, Math.round((usage.spentUsd / Math.max(0.01, usage.budgetUsd)) * 100))
-  return <><PageIntro eyebrow="Operator workspace" title="Settings & readiness" description="Inspect provider readiness, budget, and the smallest set of secrets you still need to add." action={API_MODE ? <ActionButton icon="refresh" variant="secondary" onClick={() => onRefresh().then(() => undefined)}>Sync readiness</ActionButton> : undefined} />
-    <section className="provider-grid">
-      {providers.map(provider => <article key={provider.key} className={`provider-card ${readiness[provider.key] ? 'is-ready' : 'is-missing'}`}>
-        <div className="provider-head"><span className={`status-dot ${readiness[provider.key] ? 'status-dot-green' : 'status-dot-red'}`} />{provider.name}</div>
+
+  return <>
+    <PageIntro eyebrow="Operator workspace" title="Settings & readiness" description="Configure providers, inspect budget, and see exactly which keys are still missing." action={API_MODE ? <ActionButton icon="refresh" variant="secondary" onClick={() => onRefresh().then(() => undefined)}>Sync readiness</ActionButton> : undefined} />
+
+    <section className="settings-section">
+      <SectionHeading eyebrow="Script generation" title="LLM providers" action={<span className="active-provider-chip">Active: <strong>{activeLlmProvider}</strong></span>} />
+      <div className="llm-provider-grid">
+        {LLM_PROVIDER_CARDS.map(card => {
+          const isActive = activeLlmProvider === card.id
+          const isReady = card.id === 'local' || (card.id === 'groq' && readiness.groq) || (card.id === 'openrouter' && readiness.openrouter) || (card.id === 'nvidia' && readiness.nvidia) || (card.id === 'gemini' && readiness.llm && activeLlmProvider === 'gemini') || (card.id === 'openai' && readiness.llm && activeLlmProvider === 'openai')
+          return (
+            <article key={card.id} className={`llm-card ${isActive ? 'llm-card-active' : ''} ${isReady && !isActive ? 'llm-card-ready' : ''}`}>
+              <div className="llm-card-head">
+                <span className={`provider-badge badge-${card.badge.toLowerCase().replace('-','')}`}>{card.badge}</span>
+                {isActive && <span className="active-indicator"><span className="status-dot" />Active</span>}
+              </div>
+              <strong className="llm-card-name">{card.name}</strong>
+              <code className="llm-card-model">{card.model}</code>
+              <p className="llm-card-desc">{card.description}</p>
+              <div className="llm-card-footer">
+                <code className="env-chip">{card.envVar}</code>
+                {card.signupUrl && <a href={card.signupUrl} target="_blank" rel="noreferrer" className="signup-link">Get key <Icon name="external" size={11} /></a>}
+              </div>
+            </article>
+          )
+        })}
+      </div>
+    </section>
+
+    <section className="provider-grid settings-section">
+      <SectionHeading eyebrow="Infrastructure" title="Pipeline services" />
+      {infraProviders.map(provider => <article key={String(provider.key)} className={`provider-card ${readiness[provider.key] ? 'is-ready' : 'is-missing'}`}>
+        <div className="provider-head">
+          <span className={`status-dot ${readiness[provider.key] ? 'status-dot-green' : 'status-dot-red'}`} />
+          {provider.name}
+          {provider.isFree && <span className="provider-badge badge-free" style={{ marginLeft: 'auto', fontSize: '9px', padding: '2px 6px' }}>FREE</span>}
+        </div>
         <p className="provider-desc">{provider.description}</p>
-        <div className="provider-meta"><span>{readiness[provider.key] ? 'Ready (live or fallback)' : 'Awaiting credential'}</span><span>Needs: {provider.needed.join(', ')}</span></div>
+        <div className="provider-meta"><span>{readiness[provider.key] ? 'Ready' : 'Awaiting credential'}</span><code style={{ fontSize: '9px', color: '#8a8b98' }}>{provider.needed}</code></div>
       </article>)}
     </section>
+
     <section className="panel budget-panel">
-      <SectionHeading eyebrow="Cost guardrail" title="Monthly AI budget" action={<span className="muted">Resets on the 1st of every month</span>} />
+      <SectionHeading eyebrow="Cost guardrail" title="Monthly AI budget" action={<span className="muted">Resets on the 1st of each month</span>} />
       <div className="budget-row">
         <div className="budget-bar"><span className="budget-bar-fill" style={{ width: `${spentPercent}%`, background: spentPercent > 80 ? 'var(--red)' : spentPercent > 60 ? 'var(--yellow)' : 'var(--green)' }} /></div>
         <div className="budget-figures">
@@ -524,20 +583,22 @@ function SettingsPage({ state, onRefresh }: { state: AppState; onRefresh: () => 
           <div><span>Month</span><strong>{usage.month}</strong></div>
         </div>
       </div>
-      <p className="muted">The autopilot circuit-breaker pauses automation the moment a single spend would exceed the configured budget. Configure with <code>MONTHLY_AI_BUDGET_USD</code> in <code>.env</code>.</p>
+      <p className="muted">Using Groq, OpenRouter, or NVIDIA NIM free tiers? Your spend stays at $0 regardless of how many Shorts you run. The circuit breaker only triggers for paid providers (OpenAI/Gemini).</p>
     </section>
+
     <section className="panel runbook-panel">
-      <SectionHeading eyebrow="Minimal-cost runbook" title="Operator setup checklist" />
+      <SectionHeading eyebrow="Zero-cost quick-start" title="Recommended setup" />
       <ol className="runbook-list">
-        <li><strong>Activate providers only when you need them.</strong> The local fallback completes the entire pipeline with $0 spend and FFmpeg on PATH.</li>
-        <li><strong>Paste the smallest set of env vars</strong> from <code>sessions/.env.example</code> into your <code>.env</code>. Never copy provider keys into a <code>VITE_</code> variable — they leak to the browser.</li>
-        <li><strong>Activate YouTube last.</strong> Until OAuth is configured, the API marks uploads as <em>scheduled</em> with idempotent keys; retries do not duplicate work.</li>
-        <li><strong>Back up the SQLite database and media volume daily.</strong> Mount the <code>data/</code> folder on a persistent volume when running under Docker Compose.</li>
-        <li><strong>Run the verification trio</strong> after every deploy: <code>npm run build &amp;&amp; npm test &amp;&amp; npm run api:smoke</code>.</li>
+        <li><strong>Start free.</strong> Set <code>LLM_PROVIDER=groq</code> and <code>GROQ_API_KEY=&lt;your key&gt;</code> — sign up free at <a href="https://console.groq.com" target="_blank" rel="noreferrer">console.groq.com</a>. 14,400 requests/day, no credit card needed.</li>
+        <li><strong>Add Pexels for visuals.</strong> Free 200 req/hr at <a href="https://www.pexels.com/api" target="_blank" rel="noreferrer">pexels.com/api</a>. Without it the built-in gradient PNG renderer generates every frame locally.</li>
+        <li><strong>Add YouTube API key</strong> for topic discovery — free 10,000 quota units/day via Google Cloud Console.</li>
+        <li><strong>Activate YouTube OAuth last</strong> for actual uploads. Until then uploads are marked <em>scheduled</em> and retries are safe.</li>
+        <li><strong>Never put provider keys in <code>VITE_*</code> variables.</strong> They will leak to every browser that loads the page.</li>
       </ol>
     </section>
   </>
 }
+
 
 function AuditPage({ state }: { state: AppState }) {
   if (!API_MODE) {

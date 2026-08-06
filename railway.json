@@ -1,0 +1,8 @@
+{
+  "deploy": {
+    "startCommand": "npm run dev:api",
+    "buildCommand": "npm run build",
+    "healthcheckPath": "/api/health",
+    "restartPolicyType": "on_failure"
+  }
+}

@@ -1,5 +1,7 @@
 import { resolve } from 'node:path'
 
+export type LlmProvider = 'openai' | 'gemini' | 'groq' | 'openrouter' | 'nvidia' | 'local'
+
 export type ServerConfig = {
   port: number
   dbPath: string
@@ -8,25 +10,48 @@ export type ServerConfig = {
   appOrigin: string
   apiToken?: string
   maxBodyBytes: number
-  llmProvider: 'openai' | 'gemini' | 'local'
+
+  // LLM / script generation
+  llmProvider: LlmProvider
   openaiApiKey?: string
   openaiModel: string
   geminiApiKey?: string
   geminiModel: string
+  // --- FREE providers ---
+  groqApiKey?: string
+  groqModel: string
+  openrouterApiKey?: string
+  openrouterModel: string
+  nvidiaApiKey?: string
+  nvidiaModel: string
+
+  // YouTube
   youtubeApiKey?: string
   youtubeClientId?: string
   youtubeClientSecret?: string
   youtubeRefreshToken?: string
+
+  // TTS
   dograhApiUrl?: string
   dograhApiKey?: string
   speachesApiUrl?: string
+
+  // Visuals
   pexelsApiKey?: string
+
+  // Budget / scheduler
   automationPaused: boolean
   monthlyAiBudgetUsd: number
 }
 
+const VALID_PROVIDERS: LlmProvider[] = ['openai', 'gemini', 'groq', 'openrouter', 'nvidia', 'local']
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
-  const llmProvider = env.LLM_PROVIDER === 'openai' || env.LLM_PROVIDER === 'gemini' ? env.LLM_PROVIDER : 'local'
+  const raw = String(env.LLM_PROVIDER || 'local')
+  const llmProvider: LlmProvider = (VALID_PROVIDERS as string[]).includes(raw)
+    ? (raw as LlmProvider)
+    : 'local'
+
   return {
     port: Number(env.PORT || 8787),
     dbPath: env.SHORTS_DB_PATH || resolve(process.cwd(), 'data/shorts-autopilot.sqlite'),
@@ -35,27 +60,50 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     appOrigin: env.APP_ORIGIN || 'http://localhost:5173',
     apiToken: env.API_TOKEN,
     maxBodyBytes: Number(env.MAX_BODY_BYTES || 1_000_000),
+
     llmProvider,
     openaiApiKey: env.OPENAI_API_KEY,
     openaiModel: env.OPENAI_MODEL || 'gpt-4o-mini',
     geminiApiKey: env.GEMINI_API_KEY || env.GOOGLE_API_KEY,
     geminiModel: env.GEMINI_MODEL || 'gemini-2.5-flash',
+    // Free providers
+    groqApiKey: env.GROQ_API_KEY,
+    groqModel: env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+    openrouterApiKey: env.OPENROUTER_API_KEY,
+    openrouterModel: env.OPENROUTER_MODEL || 'meta-llama/llama-3.1-8b-instruct:free',
+    nvidiaApiKey: env.NVIDIA_API_KEY,
+    nvidiaModel: env.NVIDIA_MODEL || 'meta/llama-3.1-70b-instruct',
+
     youtubeApiKey: env.YOUTUBE_API_KEY,
     youtubeClientId: env.YOUTUBE_CLIENT_ID,
     youtubeClientSecret: env.YOUTUBE_CLIENT_SECRET,
     youtubeRefreshToken: env.YOUTUBE_REFRESH_TOKEN,
+
     dograhApiUrl: env.DOGRAH_API_URL,
     dograhApiKey: env.DOGRAH_API_KEY,
     speachesApiUrl: env.SPEACHES_API_URL,
     pexelsApiKey: env.PEXELS_API_KEY,
+
     automationPaused: env.AUTOMATION_PAUSED === 'true',
     monthlyAiBudgetUsd: Number(env.MONTHLY_AI_BUDGET_USD || 5),
   }
 }
 
 export function providerReadiness(config: ServerConfig) {
+  const llmReady =
+    config.llmProvider === 'local' ||
+    (config.llmProvider === 'openai' && Boolean(config.openaiApiKey)) ||
+    (config.llmProvider === 'gemini' && Boolean(config.geminiApiKey)) ||
+    (config.llmProvider === 'groq' && Boolean(config.groqApiKey)) ||
+    (config.llmProvider === 'openrouter' && Boolean(config.openrouterApiKey)) ||
+    (config.llmProvider === 'nvidia' && Boolean(config.nvidiaApiKey))
+
   return {
-    llm: config.llmProvider === 'local' || (config.llmProvider === 'openai' ? Boolean(config.openaiApiKey) : Boolean(config.geminiApiKey)),
+    llm: llmReady,
+    llmProvider: config.llmProvider,
+    groq: Boolean(config.groqApiKey),
+    openrouter: Boolean(config.openrouterApiKey),
+    nvidia: Boolean(config.nvidiaApiKey),
     youtube: Boolean(config.youtubeClientId && config.youtubeClientSecret && config.youtubeRefreshToken),
     youtubeSearch: Boolean(config.youtubeApiKey),
     dograh: Boolean(config.dograhApiUrl || config.speachesApiUrl),
