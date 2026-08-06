@@ -46,6 +46,8 @@ export function createHttpServer(db: ShortsDatabase, workflow: ShortsWorkflow, c
       if (req.method === 'POST' && url.pathname === '/api/uploads') { const body = await readBody(req, config.maxBodyBytes); ok(res, await workflow.createUpload(String(body.videoId), { title: String(body.title || ''), description: body.description ? String(body.description) : undefined, tags: Array.isArray(body.tags) ? body.tags.map(String) : [], scheduledAt: body.scheduledAt ? String(body.scheduledAt) : undefined }), 201); return }
       const uploadPublish = url.pathname.match(/^\/api\/uploads\/([^/]+)\/publish$/)
       if (req.method === 'POST' && uploadPublish) { ok(res, await workflow.publishUpload(uploadPublish[1])); return }
+      const uploadApprove = url.pathname.match(/^\/api\/uploads\/([^/]+)\/approve$/)
+      if (req.method === 'POST' && uploadApprove) { ok(res, await workflow.approveForPublish(uploadApprove[1])); return }
       const uploadRetry = url.pathname.match(/^\/api\/uploads\/([^/]+)\/retry$/)
       if (req.method === 'POST' && uploadRetry) { ok(res, await workflow.publishUpload(uploadRetry[1])); return }
       if (req.method === 'GET' && url.pathname === '/api/analytics') { ok(res, db.listAnalytics()); return }
@@ -55,6 +57,6 @@ export function createHttpServer(db: ShortsDatabase, workflow: ShortsWorkflow, c
       if (req.method === 'POST' && url.pathname === '/api/runs/manual') { const body = await readBody(req, config.maxBodyBytes); ok(res, await workflow.runManual({ niche: String(body.niche || 'Productivity'), topicTitle: body.topicTitle ? String(body.topicTitle) : undefined }), 201); return }
       if (req.method === 'POST' && url.pathname === '/api/runs/scheduled') { ok(res, await workflow.runScheduled(), 201); return }
       send(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: 'Route not found' } })
-    } catch (error) { fail(res, error, requestOrigin) }
+    } catch (error) { console.error('[API ERROR]', req.method, req.url, error); fail(res, error, requestOrigin) }
   })
 }

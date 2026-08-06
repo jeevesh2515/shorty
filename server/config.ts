@@ -42,6 +42,9 @@ export type ServerConfig = {
   // Budget / scheduler
   automationPaused: boolean
   monthlyAiBudgetUsd: number
+  reviewHourLondon: number
+  publishHourLondon: number
+  reviewLimit: number
 }
 
 const VALID_PROVIDERS: LlmProvider[] = ['openai', 'gemini', 'groq', 'openrouter', 'nvidia', 'local']
@@ -70,7 +73,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     groqApiKey: env.GROQ_API_KEY,
     groqModel: env.GROQ_MODEL || 'llama-3.3-70b-versatile',
     openrouterApiKey: env.OPENROUTER_API_KEY,
-    openrouterModel: env.OPENROUTER_MODEL || 'meta-llama/llama-3.1-8b-instruct:free',
+    openrouterModel: env.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free',
     nvidiaApiKey: env.NVIDIA_API_KEY,
     nvidiaModel: env.NVIDIA_MODEL || 'meta/llama-3.1-70b-instruct',
 
@@ -86,6 +89,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
 
     automationPaused: env.AUTOMATION_PAUSED === 'true',
     monthlyAiBudgetUsd: Number(env.MONTHLY_AI_BUDGET_USD || 5),
+    reviewHourLondon: Number(env.REVIEW_HOUR_LONDON || 9),
+    publishHourLondon: Number(env.PUBLISH_HOUR_LONDON || 18),
+    reviewLimit: Number(env.REVIEW_LIMIT || 10),
   }
 }
 
@@ -109,5 +115,6 @@ export function providerReadiness(config: ServerConfig) {
     dograh: Boolean(config.dograhApiUrl || config.speachesApiUrl),
     visuals: Boolean(config.pexelsApiKey),
     renderer: true,
+    reviewMode: true,
   }
 }

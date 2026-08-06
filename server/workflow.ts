@@ -65,7 +65,7 @@ export class ShortsWorkflow {
       let assets = video.visualAssets
       if (!assets.length) {
         const result = await searchVisuals(script.titleSuggestion || script.hook, this.config)
-        assets = result.assets.map(asset => asset.url)
+        assets = result.assets
       }
       // An empty asset list is intentional: the renderer creates a deterministic SVG fallback.
       this.db.updateVideo(videoId, { visualAssets: assets })
@@ -74,7 +74,8 @@ export class ShortsWorkflow {
       const updated = this.db.getVideo(videoId)
       if (!updated) throw new Error('Video disappeared during render')
       const result = await renderVideo(updated, script, this.config, this.config.mediaDir)
-      const ready = this.db.updateVideo(videoId, { status: 'ready', finalVideoUrl: result.finalVideoUrl, thumbnailUrl: result.thumbnailUrl })
+      const status = this.reviewModeActive() ? 'review_required' : 'ready'
+      const ready = this.db.updateVideo(videoId, { status, finalVideoUrl: result.finalVideoUrl, thumbnailUrl: result.thumbnailUrl })
       return { video: ready, providers: { visuals: 'configured-or-local', voice: voice.provider, renderer: result.provider } }
     } catch (error) {
       this.db.updateVideo(videoId, { status: 'failed' })
@@ -89,7 +90,21 @@ export class ShortsWorkflow {
     const key = stableIdempotencyKey([videoId, input.title, input.scheduledAt || 'now'])
     const existing = this.db.getUploadByKey(key)
     if (existing) return existing
-    return this.db.createUpload({ id: randomUUID(), videoId, title: input.title, description: input.description, tags: input.tags || [], scheduledAt: input.scheduledAt, status: input.scheduledAt ? 'scheduled' : 'pending', idempotencyKey: key, createdAt: nowIso(), updatedAt: nowIso() })
+    const needsReview = this.reviewModeActive()
+    return this.db.createUpload({ id: randomUUID(), videoId, title: input.title, description: input.description, tags: input.tags || [], scheduledAt: input.scheduledAt, status: needsReview ? 'review_required' : input.scheduledAt ? 'scheduled' : 'pending', idempotencyKey: key, createdAt: nowIso(), updatedAt: nowIso() })
+  }
+
+  async approveForPublish(uploadId: string) {
+    const upload = this.db.getUpload(uploadId)
+    if (!upload) throw new DomainError('NOT_FOUND', `Upload ${uploadId} was not found`, 404)
+    if (upload.status !== 'review_required') throw new DomainError('PRECONDITION_FAILED', 'Upload is not awaiting review', 412)
+    const video = this.db.getVideo(upload.videoId)
+    if (!video?.finalVideoUrl) throw new DomainError('PRECONDITION_FAILED', 'Video must be rendered before approval', 412)
+    if (video.status === 'review_required') this.db.updateVideo(video.id, { status: 'ready' })
+    const scheduledAt = nextLondonTime(this.config.publishHourLondon)
+    const approved = this.db.updateUpload(uploadId, { status: 'approved_for_publish', scheduledAt })
+    this.db.audit('upload', uploadId, 'approved_for_publish', 'approved_for_publish', 'Approved for the next London publishing slot', { scheduledAt })
+    return approved
   }
 
   async publishUpload(uploadId: string) {
@@ -124,16 +139,17 @@ export class ShortsWorkflow {
     const generated = await this.generateScript(topic.id)
     const script = generated.script
     if (!script) throw new Error('Script generation returned no script')
-    const approved = await this.approveScript(script.id)
-    const video = await this.createVideo(approved.id)
+    const video = await this.createVideo(script.id)
     const produced = await this.produceVideo(video.id)
-    const upload = await this.createUpload(video.id, { title: approved.titleSuggestion || topic.title, description: approved.descriptionSuggestion, tags: approved.tagsSuggestion })
-    return { topic, script: approved, video: produced.video, upload, providers: generated.provider }
+    const upload = await this.createUpload(video.id, { title: script.titleSuggestion || topic.title, description: script.descriptionSuggestion, tags: script.tagsSuggestion })
+    return { topic, script, video: produced.video, upload, providers: generated.provider }
   }
 
   async runScheduled() {
     if (this.config.automationPaused || this.db.getSetting('automation_paused') === 'true') return { skipped: true, reason: 'automation_paused' }
-    const day = new Date().toISOString().slice(0, 10)
+    const london = londonParts(new Date())
+    if (london.hour !== this.config.reviewHourLondon) return { skipped: true, reason: 'outside_review_window', hour: london.hour }
+    const day = `${london.year}-${String(london.month).padStart(2, '0')}-${String(london.day).padStart(2, '0')}`
     const key = `scheduled:${day}`
     if (this.db.getSetting(key) === 'complete') return { skipped: true, reason: 'already_completed', day }
     this.db.setSetting(key, 'running')
@@ -141,4 +157,20 @@ export class ShortsWorkflow {
   }
 
   usageSummary() { return this.usage.summary() }
+  private reviewModeActive() { return this.db.listUploads().filter(upload => ['approved_for_publish', 'scheduled', 'published'].includes(upload.status)).length < this.config.reviewLimit }
+}
+
+function londonParts(date: Date) {
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }).formatToParts(date)
+  const value = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find(part => part.type === type)?.value || 0)
+  return { year: value('year'), month: value('month'), day: value('day'), hour: value('hour') }
+}
+
+function nextLondonTime(hour: number) {
+  const london = londonParts(new Date())
+  const candidate = new Date(Date.UTC(london.year, london.month - 1, london.day + 1, hour, 0, 0))
+  const observed = londonParts(candidate)
+  const observedUtc = Date.UTC(observed.year, observed.month - 1, observed.day, observed.hour)
+  const offset = observedUtc - candidate.getTime()
+  return new Date(candidate.getTime() - offset).toISOString()
 }

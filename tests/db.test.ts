@@ -16,7 +16,7 @@ describe('ShortsDatabase', () => {
     const scriptId = randomUUID()
     db.createScript({ id: scriptId, topicId, text: 'A short script with a useful payoff.', durationSec: 20, hook: 'Here is the hook.', tagsSuggestion: ['science'], status: 'draft', createdAt: now, updatedAt: now })
     const videoId = randomUUID()
-    db.createVideo({ id: videoId, scriptId, visualAssets: ['local-gradient'], status: 'pending', createdAt: now, updatedAt: now })
+    db.createVideo({ id: videoId, scriptId, visualAssets: [{ path: 'local-gradient', type: 'illustration', source: 'test' }], status: 'pending', createdAt: now, updatedAt: now })
     const key = stableIdempotencyKey([videoId, 'Title', 'now'])
     const upload = db.createUpload({ id: randomUUID(), videoId, title: 'Title', tags: ['science'], status: 'pending', idempotencyKey: key, createdAt: now, updatedAt: now })
     const duplicate = db.createUpload({ ...upload, id: randomUUID() })

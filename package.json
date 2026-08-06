@@ -13,6 +13,7 @@
     "test:full": "vitest run",
     "test:watch": "vitest",
     "db:seed": "tsx scripts/seed.ts",
+    "seed:jellyfish": "tsx scripts/seed-jellyfish.ts",
     "api:smoke": "tsx scripts/smoke.ts",
     "pipeline:smoke": "tsx scripts/pipeline-smoke.ts",
     "docker:validate": "tsx scripts/docker-validate.ts"

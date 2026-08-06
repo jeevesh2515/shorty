@@ -34,8 +34,9 @@ describe('workflow.localFallbackPipeline', () => {
     expect(topic?.status).toBe('scripted')
     expect(script?.titleSuggestion).toBeTruthy()
     expect(script?.durationSec).toBeGreaterThanOrEqual(15)
-    expect(video?.status).toBe('ready')
+    expect(video?.status).toBe('review_required')
     expect(video?.finalVideoUrl).toMatch(/^\/media\//)
+    expect(upload?.status).toBe('review_required')
     expect(upload?.idempotencyKey.length).toBeGreaterThan(20)
 
     const files = readdirSync(mediaDir)
