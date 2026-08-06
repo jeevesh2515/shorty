@@ -19,6 +19,9 @@ REQUIRED_SECRETS.md
 10_MEMORY.md
 MEGA_PROMPT.md
 
+# Generated runtime data (SQLite + rendered media)
+data/
+
 # Logs
 *.log
 npm-debug.log*

@@ -1,0 +1,39 @@
+import { afterEach, describe, expect, it } from 'vitest'
+import { randomUUID } from 'node:crypto'
+import { ShortsDatabase, stableIdempotencyKey } from '../server/db.js'
+import { DomainError } from '../server/domain.js'
+
+let db: ShortsDatabase
+
+afterEach(() => db?.close())
+
+describe('ShortsDatabase', () => {
+  it('persists the complete relational chain and audit events', () => {
+    db = new ShortsDatabase({ filename: ':memory:' })
+    const now = new Date().toISOString()
+    const topicId = randomUUID()
+    db.createTopic({ id: topicId, title: 'Test topic', niche: 'Science', source: 'manual', status: 'new', metrics: {}, createdAt: now, updatedAt: now })
+    const scriptId = randomUUID()
+    db.createScript({ id: scriptId, topicId, text: 'A short script with a useful payoff.', durationSec: 20, hook: 'Here is the hook.', tagsSuggestion: ['science'], status: 'draft', createdAt: now, updatedAt: now })
+    const videoId = randomUUID()
+    db.createVideo({ id: videoId, scriptId, visualAssets: ['local-gradient'], status: 'pending', createdAt: now, updatedAt: now })
+    const key = stableIdempotencyKey([videoId, 'Title', 'now'])
+    const upload = db.createUpload({ id: randomUUID(), videoId, title: 'Title', tags: ['science'], status: 'pending', idempotencyKey: key, createdAt: now, updatedAt: now })
+    const duplicate = db.createUpload({ ...upload, id: randomUUID() })
+    expect(duplicate.id).toBe(upload.id)
+    expect(db.getTopic(topicId)?.title).toBe('Test topic')
+    expect(db.getScript(scriptId)?.topicId).toBe(topicId)
+    expect(db.getVideo(videoId)?.scriptId).toBe(scriptId)
+    expect(db.getUpload(upload.id)?.videoId).toBe(videoId)
+    expect(db.listAudit().length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('rejects invalid status transitions', () => {
+    db = new ShortsDatabase({ filename: ':memory:' })
+    const now = new Date().toISOString()
+    const topic = db.createTopic({ id: randomUUID(), title: 'Test', niche: 'Science', source: 'manual', status: 'new', metrics: {}, createdAt: now, updatedAt: now })
+    expect(() => db.updateTopicStatus(topic.id, 'scripted')).toThrowError(DomainError)
+    expect(db.updateTopicStatus(topic.id, 'selected')?.status).toBe('selected')
+    expect(db.updateTopicStatus(topic.id, 'rejected')?.status).toBe('rejected')
+  })
+})
