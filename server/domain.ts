@@ -1,8 +1,31 @@
 export type TopicSource = 'trending' | 'evergreen' | 'manual'
 export type TopicStatus = 'new' | 'selected' | 'scripted' | 'rejected'
 export type ScriptStatus = 'draft' | 'approved' | 'rejected'
-export type VideoStatus = 'pending' | 'rendering' | 'ready' | 'failed'
-export type UploadStatus = 'pending' | 'scheduled' | 'published' | 'failed'
+export type VideoStatus = 'pending' | 'rendering' | 'review_required' | 'ready' | 'failed'
+export type UploadStatus = 'pending' | 'review_required' | 'approved_for_publish' | 'scheduled' | 'published' | 'failed'
+
+export type VisualAsset = {
+  path: string
+  type: 'image' | 'video' | 'illustration'
+  source: string
+  credit?: string
+  license?: string
+  verifiedSpecies?: boolean
+  role?: string
+  startSec?: number
+  endSec?: number
+}
+
+export type CaptionCue = { startSec: number; endSec: number; text: string }
+
+export type RenderManifest = {
+  captions: CaptionCue[]
+  posterFrameSec: number
+  factualSources: string[]
+  requiresSyntheticDisclosure: boolean
+  contactSheetUrl?: string
+  compliance: string[]
+}
 
 export type Topic = {
   id: string
@@ -35,7 +58,8 @@ export type Video = {
   id: string
   scriptId: string
   audioUrl?: string
-  visualAssets: string[]
+  visualAssets: VisualAsset[]
+  renderManifest?: RenderManifest
   finalVideoUrl?: string
   thumbnailUrl?: string
   status: VideoStatus
@@ -100,8 +124,8 @@ export function assertStatusTransition(entity: 'topic' | 'script' | 'video' | 'u
   const transitions: Record<string, Record<string, string[]>> = {
     topic: { new: ['selected', 'rejected'], selected: ['scripted', 'rejected'], scripted: ['rejected'], rejected: ['new'] },
     script: { draft: ['approved', 'rejected'], approved: ['rejected', 'draft'], rejected: ['draft'] },
-    video: { pending: ['rendering', 'failed'], rendering: ['ready', 'failed', 'pending'], ready: ['rendering', 'failed'], failed: ['pending', 'rendering'] },
-    upload: { pending: ['scheduled', 'published', 'failed'], scheduled: ['published', 'failed', 'pending'], published: ['failed'], failed: ['pending', 'scheduled'] },
+    video: { pending: ['rendering', 'failed'], rendering: ['review_required', 'ready', 'failed', 'pending'], review_required: ['ready', 'rendering', 'failed'], ready: ['rendering', 'failed'], failed: ['pending', 'rendering'] },
+    upload: { pending: ['review_required', 'scheduled', 'published', 'failed'], review_required: ['approved_for_publish', 'failed', 'pending'], approved_for_publish: ['scheduled', 'published', 'failed'], scheduled: ['published', 'failed', 'pending'], published: ['failed'], failed: ['pending', 'scheduled'] },
   }
   if (from === to) return
   if (!transitions[entity]?.[from]?.includes(to)) throw new DomainError('INVALID_TRANSITION', `Cannot transition ${entity} from ${from} to ${to}`)
