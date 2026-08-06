@@ -3,7 +3,7 @@ import { localScript, searchVisuals } from '../server/providers.js'
 import type { ServerConfig } from '../server/config.js'
 import type { Topic } from '../server/domain.js'
 
-const config: ServerConfig = { port: 8787, dbPath: ':memory:', mediaDir: '/tmp/shorts-autopilot-test', staticDir: '/tmp/shorts-autopilot-dist', appOrigin: 'http://localhost:5173', apiToken: undefined, maxBodyBytes: 1_000_000, llmProvider: 'local', openaiModel: 'gpt-4o-mini', geminiModel: 'gemini-2.5-flash', automationPaused: false, monthlyAiBudgetUsd: 5 }
+const config: ServerConfig = { port: 8787, dbPath: ':memory:', mediaDir: '/tmp/shorts-autopilot-test', staticDir: '/tmp/shorts-autopilot-dist', appOrigin: 'http://localhost:5173', apiToken: undefined, maxBodyBytes: 1_000_000, llmProvider: 'local', openaiModel: 'gpt-4o-mini', geminiModel: 'gemini-2.5-flash', groqModel: 'llama-3.3-70b-versatile', openrouterModel: 'meta-llama/llama-3.1-8b-instruct:free', nvidiaModel: 'meta/llama-3.1-70b-instruct', automationPaused: false, monthlyAiBudgetUsd: 5 }
 const topic: Topic = { id: 'topic-1', title: 'Why tiny habits compound', niche: 'Productivity', source: 'manual', status: 'new', metrics: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
 
 describe('provider fallbacks', () => {
