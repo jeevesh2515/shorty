@@ -12,6 +12,12 @@ build/
 !.env.example
 *.pem
 *.key
+REQUIRED_SECRETS.md
+
+# Internal Agent & Planning (Local Only)
+.planning/
+10_MEMORY.md
+MEGA_PROMPT.md
 
 # Logs
 *.log
