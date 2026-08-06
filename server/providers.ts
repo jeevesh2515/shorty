@@ -245,20 +245,24 @@ export async function generateVoiceover(
   const baseUrl = config.speachesApiUrl
   if (!baseUrl) return { provider: 'not-configured' }
   mkdirSync(outputDir, { recursive: true })
-  const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/audio/speech`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(config.dograhApiKey ? { Authorization: `Bearer ${config.dograhApiKey}` } : {}),
-    },
-    body: JSON.stringify({ model: 'tts-1', voice: 'alloy', input: text, response_format: 'mp3' }),
-  })
-  if (!response.ok) throw new Error(`TTS provider failed (${response.status})`)
-  const fileName = `voice-${Date.now()}.mp3`
-  const path = join(outputDir, fileName)
-  const buffer = Buffer.from(await response.arrayBuffer())
-  await import('node:fs/promises').then(fs => fs.writeFile(path, buffer))
-  return { audioUrl: `/media/${fileName}`, provider: 'speaches-openai-compatible' }
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/audio/speech`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(config.dograhApiKey ? { Authorization: `Bearer ${config.dograhApiKey}` } : {}),
+      },
+      body: JSON.stringify({ model: 'tts-1', voice: 'alloy', input: text, response_format: 'mp3' }),
+    })
+    if (!response.ok) return { provider: 'local-fallback' }
+    const fileName = `voice-${Date.now()}.mp3`
+    const path = join(outputDir, fileName)
+    const buffer = Buffer.from(await response.arrayBuffer())
+    await import('node:fs/promises').then(fs => fs.writeFile(path, buffer))
+    return { audioUrl: `/media/${fileName}`, provider: 'speaches-openai-compatible' }
+  } catch (_err) {
+    return { provider: 'local-fallback' }
+  }
 }
 
 // ---------------------------------------------------------------------------
