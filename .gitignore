@@ -22,6 +22,7 @@ MEGA_PROMPT.md
 
 # Generated runtime data (SQLite + rendered media)
 data/
+videos/
 
 # Logs
 *.log

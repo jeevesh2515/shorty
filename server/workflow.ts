@@ -5,7 +5,7 @@ import type { ServerConfig } from './config.js'
 import { ShortsDatabase, stableIdempotencyKey } from './db.js'
 import { DomainError, nowIso } from './domain.js'
 import { UsageLedger } from './usage.js'
-import { discoverTopics, generateScript, generateVoiceover, generateThumbnailConcept, renderVideo, searchVisuals, uploadToYouTube, fetchYouTubeAnalytics } from './providers.js'
+import { discoverTopics, generateScript, generateThumbnailConcept, generateVoiceover, judgeScript, renderVideo, searchVisuals, uploadToYouTube, fetchYouTubeAnalytics } from './providers.js'
 
 export class ShortsWorkflow {
   private readonly usage: UsageLedger
@@ -22,23 +22,80 @@ export class ShortsWorkflow {
     return { provider: result.provider, topics }
   }
 
-  async generateScript(topicId: string) {
+  async generateScript(topicId: string, maxAttempts = 3, minScore = 9.0) {
     const topic = this.db.getTopic(topicId)
     if (!topic) throw new DomainError('NOT_FOUND', `Topic ${topicId} was not found`, 404)
-    const result = await generateScript(topic, this.config)
-    this.usage.record(result.provider, 'generate_script', result.estimatedCostUsd)
-    const now = nowIso()
-    const existing = this.db.getScriptForTopic(topicId)
-    if (existing) {
-      this.db.updateScriptStatus(existing.id, 'draft')
-      return { script: this.db.getScript(existing.id), provider: result.provider, estimatedCostUsd: result.estimatedCostUsd, reused: true }
+    
+    let lastDraft: any
+    let lastJudge: any
+    let lastProvider = 'local-fallback'
+    let totalCost = 0
+    let feedbackPrompt: string | undefined
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const result = await generateScript(topic, this.config, feedbackPrompt)
+      this.usage.record(result.provider, 'generate_script', result.estimatedCostUsd)
+      totalCost += result.estimatedCostUsd
+      lastProvider = result.provider
+      lastDraft = result.draft
+
+      const judge = await judgeScript(topic, result.draft, this.config)
+      lastJudge = judge
+
+      if (judge.judgeScore >= minScore) {
+        const now = nowIso()
+        const script = this.db.createScript({
+          id: randomUUID(),
+          topicId,
+          ...result.draft,
+          status: 'approved',
+          judgeScore: judge.judgeScore,
+          judgeVerdict: 'approved',
+          judgeFeedback: judge.judgeFeedback,
+          judgeCriteria: judge.criteria,
+          createdAt: now,
+          updatedAt: now,
+        })
+        const currentTopic = this.db.getTopic(topicId)
+        if (currentTopic?.status === 'new') this.db.updateTopicStatus(topicId, 'selected')
+        this.db.updateTopicStatus(topicId, 'scripted')
+        return { script: this.db.getScript(script.id), judge, attempts: attempt, provider: result.provider, estimatedCostUsd: totalCost, approved: true }
+      }
+
+      feedbackPrompt = `Attempt #${attempt} scored ${judge.judgeScore}/10. Feedback: ${judge.judgeFeedback}`
     }
-    const script = this.db.createScript({ id: randomUUID(), topicId, ...result.draft, createdAt: now, updatedAt: now })
-    // Walk the documented state machine: new → selected → scripted.
+
+    const now = nowIso()
+    const script = this.db.createScript({
+      id: randomUUID(),
+      topicId,
+      ...lastDraft,
+      status: 'draft',
+      judgeScore: lastJudge?.judgeScore,
+      judgeVerdict: 'rejected',
+      judgeFeedback: lastJudge?.judgeFeedback,
+      judgeCriteria: lastJudge?.criteria,
+      createdAt: now,
+      updatedAt: now,
+    })
     const currentTopic = this.db.getTopic(topicId)
     if (currentTopic?.status === 'new') this.db.updateTopicStatus(topicId, 'selected')
     this.db.updateTopicStatus(topicId, 'scripted')
-    return { script: this.db.getScript(script.id), provider: result.provider, estimatedCostUsd: result.estimatedCostUsd, reused: false }
+    return { script: this.db.getScript(script.id), judge: lastJudge, attempts: maxAttempts, provider: lastProvider, estimatedCostUsd: totalCost, approved: false }
+  }
+
+  async evaluateScriptWithJudge(scriptId: string) {
+    const script = this.db.getScript(scriptId)
+    if (!script) throw new DomainError('NOT_FOUND', `Script ${scriptId} was not found`, 404)
+    const topic = this.db.getTopic(script.topicId)
+    if (!topic) throw new DomainError('NOT_FOUND', `Topic ${script.topicId} was not found`, 404)
+
+    const judge = await judgeScript(topic, script, this.config)
+    this.db.updateScriptJudge(scriptId, judge)
+    if (judge.judgeScore >= 9.0 && script.status !== 'approved') {
+      this.db.updateScriptStatus(scriptId, 'approved')
+    }
+    return { script: this.db.getScript(scriptId), judge }
   }
 
   async approveScript(scriptId: string) {

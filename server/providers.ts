@@ -36,13 +36,31 @@ export function localScript(topic: Topic): ScriptDraft {
 // Shared helper — OpenAI-compatible chat completions
 // Works with OpenAI, Groq, OpenRouter, NVIDIA NIM (all same request shape)
 // ---------------------------------------------------------------------------
+export type JudgeResult = {
+  judgeScore: number
+  judgeVerdict: 'approved' | 'rejected'
+  judgeFeedback: string
+  criteria: {
+    hookScore: number
+    retentionScore: number
+    viralityScore: number
+    pacingScore: number
+  }
+  provider: string
+}
+
 async function openAiCompatibleScript(
   topic: Topic,
   baseUrl: string,
   apiKey: string,
   model: string,
   extraHeaders: Record<string, string> = {},
+  feedbackPrompt?: string,
 ): Promise<ScriptDraft> {
+  const userContent = feedbackPrompt
+    ? `Create a 15–45 second YouTube Short script about "${topic.title}". Niche: ${topic.niche}. ATTENTION: PREVIOUS DRAFT WAS REJECTED BY AI JUDGE (${feedbackPrompt}). You MUST write a much stronger 3-second hook, remove all filler, and build intense curiosity. Return JSON only.`
+    : `Create a 15–45 second YouTube Short script about this topic: "${topic.title}". Niche: ${topic.niche}. The script must have a strong hook (first sentence grabs attention), a surprising fact, and a question CTA at the end. Return JSON only.`
+
   const data = await requestJson(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -62,7 +80,7 @@ async function openAiCompatibleScript(
         },
         {
           role: 'user',
-          content: `Create a 15–45 second YouTube Short script about this topic: "${topic.title}". Niche: ${topic.niche}. The script must have a strong hook (first sentence grabs attention), a surprising fact, and a question CTA at the end. Return JSON only.`,
+          content: userContent,
         },
       ],
     }),
@@ -74,9 +92,166 @@ async function openAiCompatibleScript(
   )
   if (!content) throw new Error('LLM returned empty content')
 
-  // Strip markdown code fences if provider wraps JSON in ```json
   const cleaned = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
   return { ...localScript(topic), ...JSON.parse(cleaned), status: 'draft' }
+}
+
+async function openAiCompatibleJudge(
+  topic: Topic,
+  draft: ScriptDraft | Script,
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  extraHeaders: Record<string, string> = {},
+): Promise<Omit<JudgeResult, 'provider'>> {
+  const systemPrompt = `You are a world-class YouTube Shorts Algorithm Judge and Content Director.
+Your task is to judge the viral potential, retention power, and hook strength of YouTube Shorts scripts on a strict 0 to 10 scale.
+A score of 9.0 or higher is required for approval. Be extremely critical, honest, and high-standard.
+
+Evaluate on 4 criteria (0.0 to 2.5 points each):
+1. hookScore (0-2.5): Does sentence 1 instantly stop the scroll?
+2. retentionScore (0-2.5): Is there zero filler, continuous curiosity gaps, and tight structure?
+3. viralityScore (0-2.5): Is the concept/fact mind-blowing and highly shareable?
+4. pacingScore (0-2.5): Does timing (15-45s), call to action, and rhythm suit vertical video?
+
+Return ONLY valid JSON matching this schema:
+{
+  "judgeScore": 9.2,
+  "judgeVerdict": "approved",
+  "judgeFeedback": "Crisp 1-2 sentence evaluation explaining why it scored high or low.",
+  "criteria": {
+    "hookScore": 2.4,
+    "retentionScore": 2.3,
+    "viralityScore": 2.3,
+    "pacingScore": 2.2
+  }
+}`
+
+  const userPrompt = `Topic: "${topic.title}"
+Niche: ${topic.niche}
+Hook: "${draft.hook}"
+Script: "${draft.text}"
+Duration: ${draft.durationSec}s
+CTA: "${draft.cta || ''}"
+
+Evaluate this script now. Set judgeVerdict to "approved" if judgeScore >= 9.0, otherwise "rejected". Return JSON only.`
+
+  const data = await requestJson(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      ...extraHeaders,
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      max_tokens: 384,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    }),
+  })
+
+  const content = (((data.choices as Record<string, unknown>[])[0]?.message as Record<string, unknown>)?.content as string | undefined)
+  if (!content) throw new Error('LLM Judge returned empty content')
+
+  const cleaned = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+  const parsed = JSON.parse(cleaned)
+
+  const hookScore = Number(parsed.criteria?.hookScore ?? 2.2)
+  const retentionScore = Number(parsed.criteria?.retentionScore ?? 2.2)
+  const viralityScore = Number(parsed.criteria?.viralityScore ?? 2.2)
+  const pacingScore = Number(parsed.criteria?.pacingScore ?? 2.2)
+
+  let score = Number(parsed.judgeScore ?? (hookScore + retentionScore + viralityScore + pacingScore))
+  score = Math.min(10, Math.max(0, Math.round(score * 10) / 10))
+  const verdict = score >= 9.0 ? 'approved' : 'rejected'
+
+  return {
+    judgeScore: score,
+    judgeVerdict: verdict,
+    judgeFeedback: String(parsed.judgeFeedback || (verdict === 'approved' ? 'Passed quality threshold for Short production.' : 'Failed hook or retention threshold.')),
+    criteria: { hookScore, retentionScore, viralityScore, pacingScore },
+  }
+}
+
+export function localJudge(topic: Topic, draft: ScriptDraft | Script): Omit<JudgeResult, 'provider'> {
+  const wordCount = draft.text.split(/\s+/).length
+  const hasHook = draft.hook.length > 10
+  const durationOk = draft.durationSec >= 15 && draft.durationSec <= 45
+  
+  const hookScore = hasHook ? 2.4 : 1.5
+  const retentionScore = wordCount >= 25 && wordCount <= 120 ? 2.4 : 1.8
+  const viralityScore = topic.niche.toLowerCase().includes('science') || topic.niche.toLowerCase().includes('tech') ? 2.3 : 2.0
+  const pacingScore = durationOk ? 2.3 : 1.6
+  
+  const score = Math.round((hookScore + retentionScore + viralityScore + pacingScore) * 10) / 10
+  const verdict = score >= 9.0 ? 'approved' : 'rejected'
+
+  return {
+    judgeScore: score,
+    judgeVerdict: verdict,
+    judgeFeedback: verdict === 'approved'
+      ? 'Strong scroll-stopping hook and optimal 30-second pacing.'
+      : 'Hook or word density needs improvement to cross the 9.0 threshold.',
+    criteria: { hookScore, retentionScore, viralityScore, pacingScore },
+  }
+}
+
+export async function judgeScript(
+  topic: Topic,
+  draft: ScriptDraft | Script,
+  config: ServerConfig,
+): Promise<JudgeResult> {
+  if (config.llmProvider === 'openai' && config.openaiApiKey) {
+    const res = await openAiCompatibleJudge(topic, draft, 'https://api.openai.com/v1', config.openaiApiKey, config.openaiModel)
+    return { ...res, provider: `openai:${config.openaiModel}` }
+  }
+  if (config.llmProvider === 'gemini' && config.geminiApiKey) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent?key=${config.geminiApiKey}`
+    const prompt = `You are a YouTube Shorts Algorithm Judge. Rate this script from 0 to 10. Threshold for approval is 9.0. Topic: "${topic.title}". Hook: "${draft.hook}". Script: "${draft.text}". Return JSON with keys: judgeScore, judgeVerdict, judgeFeedback, criteria (hookScore, retentionScore, viralityScore, pacingScore).`
+    const data = await requestJson(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: 'application/json' },
+      }),
+    })
+    const content = (((data.candidates as Record<string, unknown>[])[0]?.content as Record<string, unknown>)?.parts as Record<string, unknown>[])[0]?.text as string | undefined
+    if (content) {
+      const parsed = JSON.parse(content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim())
+      const score = Math.min(10, Math.max(0, Math.round(Number(parsed.judgeScore || 8.5) * 10) / 10))
+      const verdict = score >= 9.0 ? 'approved' : 'rejected'
+      return {
+        judgeScore: score,
+        judgeVerdict: verdict,
+        judgeFeedback: String(parsed.judgeFeedback || 'Gemini judge evaluation complete.'),
+        criteria: {
+          hookScore: Number(parsed.criteria?.hookScore ?? 2.2),
+          retentionScore: Number(parsed.criteria?.retentionScore ?? 2.2),
+          viralityScore: Number(parsed.criteria?.viralityScore ?? 2.2),
+          pacingScore: Number(parsed.criteria?.pacingScore ?? 2.2),
+        },
+        provider: `gemini:${config.geminiModel}`,
+      }
+    }
+  }
+  if (config.llmProvider === 'groq' && config.groqApiKey) {
+    const res = await openAiCompatibleJudge(topic, draft, 'https://api.groq.com/openai/v1', config.groqApiKey, config.groqModel)
+    return { ...res, provider: `groq:${config.groqModel}` }
+  }
+  if (config.llmProvider === 'openrouter' && config.openrouterApiKey) {
+    const res = await openAiCompatibleJudge(topic, draft, 'https://openrouter.ai/api/v1', config.openrouterApiKey, config.openrouterModel, { 'HTTP-Referer': 'https://github.com/jeevesh2515/shorty', 'X-Title': 'Shorts Autopilot' })
+    return { ...res, provider: `openrouter:${config.openrouterModel}` }
+  }
+  if (config.llmProvider === 'nvidia' && config.nvidiaApiKey) {
+    const res = await openAiCompatibleJudge(topic, draft, 'https://integrate.api.nvidia.com/v1', config.nvidiaApiKey, config.nvidiaModel)
+    return { ...res, provider: `nvidia:${config.nvidiaModel}` }
+  }
+  return { ...localJudge(topic, draft), provider: 'local-judge' }
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +260,7 @@ async function openAiCompatibleScript(
 export async function generateScript(
   topic: Topic,
   config: ServerConfig,
+  feedbackPrompt?: string,
 ): Promise<{ draft: ScriptDraft; provider: string; estimatedCostUsd: number }> {
   // OpenAI
   if (config.llmProvider === 'openai' && config.openaiApiKey) {
@@ -93,6 +269,8 @@ export async function generateScript(
       'https://api.openai.com/v1',
       config.openaiApiKey,
       config.openaiModel,
+      {},
+      feedbackPrompt,
     )
     return { draft, provider: `openai:${config.openaiModel}`, estimatedCostUsd: 0.01 }
   }
@@ -100,11 +278,14 @@ export async function generateScript(
   // Gemini — uses a different request/response shape
   if (config.llmProvider === 'gemini' && config.geminiApiKey) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent?key=${config.geminiApiKey}`
+    const promptText = feedbackPrompt
+      ? `Write an original 15-45s YouTube Short script about "${topic.title}" in ${topic.niche}. PREVIOUS ATTEMPT FAILED AI JUDGE (${feedbackPrompt}). Make hook stronger, remove fluff. Return ONLY JSON with keys: text, durationSec, hook, cta, titleSuggestion, descriptionSuggestion, tagsSuggestion.`
+      : `Write an original 15-45 second YouTube Short script about "${topic.title}" in the ${topic.niche} niche. Return ONLY JSON with keys: text, durationSec, hook, cta, titleSuggestion, descriptionSuggestion, tagsSuggestion.`
     const data = await requestJson(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: `Write an original 15-45 second YouTube Short script about "${topic.title}" in the ${topic.niche} niche. Return ONLY JSON with keys: text, durationSec, hook, cta, titleSuggestion, descriptionSuggestion, tagsSuggestion.` }] }],
+        contents: [{ parts: [{ text: promptText }] }],
         generationConfig: { responseMimeType: 'application/json' },
       }),
     })
@@ -127,6 +308,8 @@ export async function generateScript(
       'https://api.groq.com/openai/v1',
       config.groqApiKey,
       config.groqModel,
+      {},
+      feedbackPrompt,
     )
     return { draft, provider: `groq:${config.groqModel}`, estimatedCostUsd: 0 }
   }
@@ -142,6 +325,7 @@ export async function generateScript(
         'HTTP-Referer': 'https://github.com/jeevesh2515/shorty',
         'X-Title': 'Shorts Autopilot',
       },
+      feedbackPrompt,
     )
     return { draft, provider: `openrouter:${config.openrouterModel}`, estimatedCostUsd: 0 }
   }
@@ -153,6 +337,8 @@ export async function generateScript(
       'https://integrate.api.nvidia.com/v1',
       config.nvidiaApiKey,
       config.nvidiaModel,
+      {},
+      feedbackPrompt,
     )
     return { draft, provider: `nvidia:${config.nvidiaModel}`, estimatedCostUsd: 0 }
   }

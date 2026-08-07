@@ -956,3 +956,112 @@ a { color: inherit; text-decoration: none; }
 @media (max-width: 760px) {
   .connection-banner { padding: 10px 17px; }
 }
+
+/* ─── LLM Judge Card ─────────────────────────────────────── */
+.judge-card {
+  margin-bottom: 20px;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.judge-pass {
+  border-color: rgba(45, 212, 168, 0.4);
+  background: linear-gradient(135deg, rgba(45, 212, 168, 0.05), var(--surface-2));
+}
+.judge-fail {
+  border-color: rgba(248, 113, 113, 0.3);
+  background: linear-gradient(135deg, rgba(248, 113, 113, 0.05), var(--surface-2));
+}
+.judge-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.judge-badge-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 13px;
+}
+.judge-icon {
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+}
+.judge-score-tag {
+  padding: 4px 10px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: 'Space Grotesk', sans-serif;
+  letter-spacing: 0.02em;
+}
+.tag-approved {
+  background: var(--green-soft);
+  color: var(--green);
+  border: 1px solid rgba(45, 212, 168, 0.3);
+}
+.tag-rejected {
+  background: var(--red-soft);
+  color: var(--red);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+}
+.tag-pending {
+  background: var(--surface-4);
+  color: var(--muted);
+}
+.judge-feedback {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  font-style: italic;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: var(--surface-3);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--accent);
+}
+.judge-criteria-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.judge-criteria-grid div {
+  background: var(--surface-3);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.judge-criteria-grid span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.judge-criteria-grid strong {
+  font-size: 12px;
+  color: var(--amber);
+}
+.judge-eval-btn {
+  background: transparent;
+  border: 1px solid var(--surface-4);
+  color: var(--soft);
+  font-size: 11px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+.judge-eval-btn:hover {
+  background: var(--surface-3);
+  color: var(--ink);
+  border-color: var(--border-hover);
+}
