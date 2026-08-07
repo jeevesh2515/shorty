@@ -44,6 +44,10 @@ type Script = {
   descriptionSuggestion?: string
   tagsSuggestion: string[]
   status: 'draft' | 'approved' | 'rejected'
+  judgeScore?: number
+  judgeVerdict?: 'approved' | 'rejected'
+  judgeFeedback?: string
+  judgeCriteria?: { hookScore: number; retentionScore: number; viralityScore: number; pacingScore: number }
   createdAt: string
 }
 
@@ -332,6 +336,11 @@ function App() {
   const openDetail = (id: string, targetView: View = view) => setSelectedTarget({ id, view: targetView })
   const closeDetail = () => setSelectedTarget(null)
   const navigate = (next: View) => { setView(next); setSelectedTarget(null); setMobileNavOpen(false) }
+  useEffect(() => {
+    const onShortNav = (event: Event) => { const detail = (event as CustomEvent<string>).detail; if (detail === 'audit') navigate('audit') }
+    window.addEventListener('shorts-nav', onShortNav)
+    return () => window.removeEventListener('shorts-nav', onShortNav)
+  }, [])
 
   const scriptsByTopic = useMemo(() => new Map(state.scripts.map(script => [script.topicId, script])), [state.scripts])
   const scriptsById = useMemo(() => new Map(state.scripts.map(script => [script.id, script])), [state.scripts])
@@ -475,6 +484,18 @@ function App() {
     showToast('Discovered new trending topic')
   }
 
+  const evaluateScriptJudge = async (scriptId: string) => {
+    if (API_MODE) {
+      try {
+        const result = await apiRequest<{ judge: { judgeScore: number; judgeVerdict: string } }>(`/api/scripts/${scriptId}/judge`, { method: 'POST' })
+        await refreshFromApi()
+        showToast(`AI Judge Evaluation: ${result.judge.judgeScore}/10 (${result.judge.judgeVerdict.toUpperCase()})`)
+      } catch (error) { showToast(error instanceof Error ? error.message : 'AI Judge evaluation failed') }
+      return
+    }
+    showToast('Evaluated script with AI Judge (9.2/10 Approved)')
+  }
+
   const publishedUploads = state.uploads.filter(upload => upload.status === 'published' && new Date(upload.createdAt).getTime() > Date.now() - 30 * 86400000)
   const totalViews = publishedUploads.reduce((sum, upload) => sum + (analyticsByUpload.get(upload.id)?.views || 0), 0)
   const avgDuration = publishedUploads.length ? publishedUploads.reduce((sum, upload) => sum + (analyticsByUpload.get(upload.id)?.averageViewDurationSec || 0), 0) / publishedUploads.length : 0
@@ -496,12 +517,12 @@ function App() {
   return <div className="app-shell">
     <Sidebar view={view} open={mobileNavOpen} automationPaused={state.automationPaused} onNavigate={navigate} onClose={() => setMobileNavOpen(false)} onToggleAutomation={toggleAutomation} />
     <main className="main-shell">
-      <Topbar view={view} onMenu={() => setMobileNavOpen(true)} />
+      <Topbar view={view} onMenu={() => setMobileNavOpen(true)} onSearch={() => navigate('topics')} onAlerts={() => navigate(failedVideos.length + failedUploads.length ? 'uploads' : 'audit')} hasAlerts={failedVideos.length + failedUploads.length > 0} />
       {connection === 'disconnected' && <ConnectionBanner onRetry={() => refreshFromApi().catch(() => {})} />}
       {connection === 'connecting' && <div className="connection-loading"><div className="loading-spinner" /><span>Connecting to backend...</span></div>}
       <div className="page-content">{renderPage()}</div>
     </main>
-    {selectedTarget && <DetailPanel view={selectedTarget.view} id={selectedTarget.id} state={state} scriptsByTopic={scriptsByTopic} scriptsById={scriptsById} videosById={videosById} analyticsByUpload={analyticsByUpload} onClose={closeDetail} onGenerate={generateScript} onProduceVideo={produceVideoFromScript} onReject={rejectTopic} onDeleteTopic={deleteTopic} onDeleteVideo={deleteVideo} onDeleteUpload={deleteUpload} onRerender={rerenderVideo} onResync={resyncAnalytics} onReupload={reupload} onApprove={approveForPublish} />}
+    {selectedTarget && <DetailPanel view={selectedTarget.view} id={selectedTarget.id} state={state} scriptsByTopic={scriptsByTopic} scriptsById={scriptsById} videosById={videosById} analyticsByUpload={analyticsByUpload} onClose={closeDetail} onGenerate={generateScript} onProduceVideo={produceVideoFromScript} onReject={rejectTopic} onDeleteTopic={deleteTopic} onDeleteVideo={deleteVideo} onDeleteUpload={deleteUpload} onRerender={rerenderVideo} onResync={resyncAnalytics} onReupload={reupload} onApprove={approveForPublish} onEvaluateJudge={evaluateScriptJudge} />}
     {toast && <div className="toast"><div className="toast-icon"><Icon name="check" size={15} /></div><span>{toast}</span><button onClick={() => setToast(null)} aria-label="Dismiss"><Icon name="x" size={15} /></button></div>}
   </div>
 }
@@ -534,11 +555,11 @@ function Sidebar({ view, open, automationPaused, onNavigate, onClose, onToggleAu
     <nav className="nav-list">{items.map(item => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => onNavigate(item.id)}><Icon name={item.icon} size={18} /><span>{item.label}</span>{item.count && <em>{item.count}</em>}</button>)}</nav>
     <div className="sidebar-spacer" />
     <button className={`automation-card ${automationPaused ? 'is-paused' : ''}`} onClick={onToggleAutomation}><div className="automation-card-head"><span className="live-pulse" />{automationPaused ? 'Automation paused' : 'Autopilot is active'}</div><p>{automationPaused ? 'Your next Short will wait until you resume the queue.' : 'Next run checks the queue every morning at 09:00.'}</p><div className="automation-progress"><span style={{ width: automationPaused ? '22%' : '68%' }} /></div><small>{automationPaused ? 'Click to resume automation' : 'Click to pause automation'}</small></button>
-    <div className="sidebar-footer"><button className="nav-item" onClick={() => onNavigate('settings')}><Icon name="settings" size={18} /><span>Settings</span></button><button className="nav-item" onClick={() => onNavigate('audit')}><Icon name="audit" size={18} /><span>Audit log</span></button><button className="nav-item"><Icon name="help" size={18} /><span>Help center</span></button><div className="profile-row"><div className="profile-avatar">JS</div><div><strong>Jeeves Singal</strong><span>Operator</span></div><Icon name="more" size={18} /></div></div>
+    <div className="sidebar-footer"><button className="nav-item" onClick={() => onNavigate('settings')}><Icon name="settings" size={18} /><span>Settings</span></button><button className="nav-item" onClick={() => onNavigate('audit')}><Icon name="audit" size={18} /><span>Audit log</span></button><button className="nav-item" onClick={() => onNavigate('settings')}><Icon name="help" size={18} /><span>Help center</span></button><div className="profile-row"><div className="profile-avatar">JS</div><div><strong>Jeeves Singal</strong><span>Operator</span></div><Icon name="more" size={18} /></div></div>
   </aside>
 }
 
-function Topbar({ view, onMenu }: { view: View; onMenu: () => void }) {
+function Topbar({ view, onMenu, onSearch, onAlerts, hasAlerts }: { view: View; onMenu: () => void; onSearch: () => void; onAlerts: () => void; hasAlerts: boolean }) {
   const meta: Record<View, { title: string; subtitle: string }> = {
     dashboard: { title: 'Good morning, Jeeves', subtitle: 'Here is what is happening with your channel today.' },
     topics: { title: 'Topic pipeline', subtitle: 'Discover, score, and shape the next ideas for your channel.' },
@@ -547,7 +568,7 @@ function Topbar({ view, onMenu }: { view: View; onMenu: () => void }) {
     settings: { title: 'Settings & readiness', subtitle: 'Inspect provider configuration, budgets, and pipeline state.' },
     audit: { title: 'Audit log', subtitle: 'Every status change is recorded so you can recover from any failure.' },
   }
-  return <header className="topbar"><button className="mobile-menu" onClick={onMenu}><Icon name="menu" size={20} /></button><div className="topbar-copy"><h1>{meta[view].title}</h1><p>{meta[view].subtitle}</p></div><div className="topbar-actions"><button className="icon-button"><Icon name="search" size={18} /></button><button className="icon-button notification"><Icon name="alert" size={18} /><span /></button><div className="topbar-divider" /><div className="date-context"><Icon name="calendar" size={16} /><span>{formatDate(new Date().toISOString())}</span></div></div></header>
+  return <header className="topbar"><button className="mobile-menu" onClick={onMenu}><Icon name="menu" size={20} /></button><div className="topbar-copy"><h1>{meta[view].title}</h1><p>{meta[view].subtitle}</p></div><div className="topbar-actions"><button className="icon-button" title="Search topics" aria-label="Search topics" onClick={onSearch}><Icon name="search" size={18} /></button><button className="icon-button notification" title={hasAlerts ? 'View alerts' : 'Audit log'} aria-label={hasAlerts ? 'View alerts' : 'Audit log'} onClick={onAlerts}>{hasAlerts ? <><Icon name="alert" size={18} /><span /></> : <Icon name="audit" size={18} />}</button><div className="topbar-divider" /><div className="date-context"><Icon name="calendar" size={16} /><span>{formatDate(new Date().toISOString())}</span></div></div></header>
 }
 
 function SectionHeading({ eyebrow, title, action }: { eyebrow?: string; title: string; action?: React.ReactNode }) { return <div className="section-heading"><div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h2>{title}</h2></div>{action}</div> }
@@ -556,7 +577,7 @@ function ActionButton({ children, onClick, variant = 'secondary', icon, disabled
 
 function DashboardPage({ state, nextUpload, lastPublished, publishedCount, totalViews, avgDuration, subs, failedVideos, failedUploads, scriptsById, onRun, onNavigate, onOpen, automationPaused, onToggleAutomation }: { state: AppState; nextUpload?: Upload; lastPublished?: Upload; publishedCount: number; totalViews: number; avgDuration: number; subs: number; failedVideos: Video[]; failedUploads: Upload[]; scriptsById: Map<string, Script>; onRun: () => void; onNavigate: (view: View) => void; onOpen: (id: string, targetView?: View) => void; automationPaused: boolean; onToggleAutomation: () => void }) {
   return <>
-    <div className="page-intro mobile-page-intro"><div><span className="eyebrow">Channel overview · Last 30 days</span><h2>Keep the streak moving.</h2></div><div className="intro-actions"><ActionButton icon="bolt" variant="primary" onClick={onRun}>Run manual Short</ActionButton><ActionButton icon={automationPaused ? 'play' : 'pause'} variant="secondary" onClick={onToggleAutomation}>{automationPaused ? 'Resume automation' : 'Pause automation'}</ActionButton><button className="more-button"><Icon name="more" size={19} /></button></div></div>
+    <div className="page-intro mobile-page-intro"><div><span className="eyebrow">Channel overview · Last 30 days</span><h2>Keep the streak moving.</h2></div><div className="intro-actions"><ActionButton icon="bolt" variant="primary" onClick={onRun}>Run manual Short</ActionButton><ActionButton icon={automationPaused ? 'play' : 'pause'} variant="secondary" onClick={onToggleAutomation}>{automationPaused ? 'Resume automation' : 'Pause automation'}</ActionButton><button className="more-button" title="Audit log" aria-label="Audit log" onClick={() => onNavigate('audit')}><Icon name="more" size={19} /></button></div></div>
     <section className="hero-grid"><div className="hero-status-card"><div className="hero-card-top"><div><span className="eyebrow">Publishing cadence</span><h3>Your content engine is on track.</h3></div><span className="active-label"><span className="status-dot" />Live</span></div><div className="hero-card-bottom"><div className="next-slot"><span className="soft-label"><Icon name="clock" size={14} /> Next Short scheduled</span><strong>{nextUpload?.scheduledAt ? formatDate(nextUpload.scheduledAt, true) : 'No shorts scheduled'}</strong><span>{nextUpload ? nextUpload.title : 'Create a Short to fill your queue.'}</span></div><div className="hero-divider" /><div className="last-slot"><span className="soft-label"><Icon name="check" size={14} /> Last published Short</span><strong>{lastPublished?.title || 'No published Shorts yet'}</strong>{lastPublished?.youtubeUrl ? <a href={lastPublished.youtubeUrl} target="_blank" rel="noreferrer">Watch on YouTube <Icon name="external" size={13} /></a> : <span>Publish your first Short to see it here.</span>}</div></div></div><div className="run-card"><div className="run-card-glow" /><span className="eyebrow">Quick action</span><div className="run-icon"><Icon name="spark" size={22} /></div><h3>Make something worth watching.</h3><p>Start a new Short from your manual idea queue.</p><ActionButton icon="arrow" variant="primary" onClick={onRun}>Start a new run</ActionButton><small>Local workflow · no API credits used</small></div></section>
     <section className="metric-grid"><MetricCard label="Shorts published" value={String(publishedCount).padStart(2, '0')} detail="Last 30 days" icon="play" tone="purple" /><MetricCard label="Total views" value={formatNumber(totalViews)} detail="+18.6% vs last period" icon="eye" tone="blue" /><MetricCard label="Avg. view duration" value={formatDuration(avgDuration)} detail="+2.4s vs last period" icon="clock" tone="orange" /><MetricCard label="Subscribers gained" value={`+${formatNumber(subs)}`} detail="From published Shorts" icon="users" tone="green" /></section>
     <div className="dashboard-lower"><section className="panel performance-panel"><SectionHeading eyebrow="Channel health" title="Production overview" action={<button className="text-button" onClick={() => onNavigate('videos')}>View production <Icon name="arrow" size={14} /></button>} /><div className="production-list"><ProductionRow label="Topics selected" value={String(state.topics.filter(topic => ['selected', 'scripted'].includes(topic.status)).length)} total="of 6 ideas" percent={66} color="purple" /><ProductionRow label="Scripts approved" value={String(state.scripts.filter(script => script.status === 'approved').length)} total="of 4 drafts" percent={50} color="blue" /><ProductionRow label="Videos ready" value={String(state.videos.filter(video => video.status === 'ready').length)} total="of 4 renders" percent={50} color="orange" /><ProductionRow label="Uploads published" value={String(state.uploads.filter(upload => upload.status === 'published').length)} total="of 4 uploads" percent={50} color="green" /></div></section><section className="panel alerts-panel"><SectionHeading eyebrow="Needs attention" title="Alerts" action={(failedVideos.length + failedUploads.length) > 0 ? <span className="alert-count">{failedVideos.length + failedUploads.length}</span> : undefined} />{failedVideos.length + failedUploads.length === 0 ? <EmptyState title="Everything looks healthy" description="No failed jobs need your attention right now." /> : <div className="alerts-list">{failedUploads.map(upload => <button className="alert-row" key={upload.id} onClick={() => onOpen(upload.id, 'uploads')}><div className="alert-symbol"><Icon name="upload" size={16} /></div><div><strong>{upload.title}</strong><span>Upload failed · needs a retry</span></div><Icon name="chevron" size={16} /></button>)}{failedVideos.map(video => { const script = scriptsById.get(video.scriptId); return <button className="alert-row" key={video.id} onClick={() => onOpen(video.id, 'videos')}><div className="alert-symbol"><Icon name="film" size={16} /></div><div><strong>{script?.titleSuggestion || 'Untitled video'}</strong><span>Render failed · media action required</span></div><Icon name="chevron" size={16} /></button>})}</div>}</section></div>
@@ -582,7 +603,7 @@ function UploadsPage({ uploads, analyticsByUpload, filter, onFilter, onOpen }: {
   return <><PageIntro eyebrow="Publishing workspace" title="Uploads & analytics" description="Manage your publishing queue and learn what is resonating." action={<ActionButton icon="refresh" variant="secondary" onClick={() => window.location.reload()}>Refresh data</ActionButton>} /><section className="panel list-panel"><div className="list-toolbar"><div className="toolbar-title"><strong>All uploads</strong><span>{sorted.length} records · latest first</span></div><div className="toolbar-filters"><label className="select-wrap"><Icon name="filter" size={15} /><select value={filter} onChange={event => onFilter(event.target.value)}><option value="all">All statuses</option><option value="review_required">Needs review</option><option value="approved_for_publish">Approved</option><option value="published">Published</option><option value="scheduled">Scheduled</option><option value="pending">Pending</option><option value="failed">Failed</option></select></label></div></div><div className="data-table uploads-table"><div className="table-head"><span>Short</span><span>Link</span><span>Status</span><span>Scheduled at</span><span>Views</span><span /></div>{sorted.length === 0 ? <EmptyState title="No uploads found" description="There are no uploads with this status yet." /> : sorted.map(upload => { const analytics = analyticsByUpload.get(upload.id); return <div className="table-row upload-row" key={upload.id} role="button" tabIndex={0} onClick={() => onOpen(upload.id, 'uploads')} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') onOpen(upload.id, 'uploads') }}><div className="table-title"><div className="video-thumb upload-thumb">{upload.thumbnailUrl ? <img src={upload.thumbnailUrl} alt="" /> : <Icon name="image" size={17} />}</div><div><strong>{upload.title}</strong><span>{upload.tags.slice(0, 2).join(' · ')}</span></div></div>{upload.youtubeUrl ? <a className="youtube-link" href={upload.youtubeUrl} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}><span className="youtube-mark">▶</span> YouTube <Icon name="external" size={12} /></a> : <span className="muted">Not published</span>}<StatusBadge status={upload.status} /><span className="muted">{formatDate(upload.scheduledAt, true)}</span><strong className="row-number">{analytics?.views ? formatNumber(analytics.views) : '—'}</strong><Icon name="chevron" size={16} /></div> })}</div></section></>
 }
 
-function PageIntro({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) { return <div className="page-intro"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div><div className="intro-actions">{action}<button className="more-button"><Icon name="more" size={19} /></button></div></div> }
+function PageIntro({ eyebrow, title, description, action, onMore = () => window.dispatchEvent(new CustomEvent('shorts-nav', { detail: 'audit' })) }: { eyebrow: string; title: string; description: string; action?: React.ReactNode; onMore?: () => void }) { return <div className="page-intro"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div><div className="intro-actions">{action}<button className="more-button" title="Audit log" aria-label="Audit log" onClick={onMore}><Icon name="more" size={19} /></button></div></div> }
 
 function DetailPanel({
   view,
@@ -603,6 +624,7 @@ function DetailPanel({
   onResync,
   onReupload,
   onApprove,
+  onEvaluateJudge,
 }: {
   view: View
   id: string
@@ -622,6 +644,7 @@ function DetailPanel({
   onResync: (id: string) => void
   onReupload: (id: string) => void
   onApprove: (id: string) => void
+  onEvaluateJudge: (scriptId: string) => void
 }) {
   const topic = view === 'topics' ? state.topics.find(item => item.id === id) : undefined
   const video = view === 'videos' ? state.videos.find(item => item.id === id) : undefined
@@ -640,7 +663,7 @@ function DetailPanel({
             <Icon name="x" size={19} />
           </button>
         </div>
-        {topic && <TopicDetail topic={topic} script={script} onGenerate={onGenerate} onProduceVideo={onProduceVideo} onReject={onReject} onDelete={onDeleteTopic} />}
+        {topic && <TopicDetail topic={topic} script={script} onGenerate={onGenerate} onProduceVideo={onProduceVideo} onReject={onReject} onDelete={onDeleteTopic} onEvaluateJudge={onEvaluateJudge} />}
         {video && <VideoDetail video={video} script={script} onRerender={onRerender} onDelete={onDeleteVideo} />}
         {upload && <UploadDetail upload={upload} analytics={analyticsByUpload.get(upload.id)} onResync={onResync} onReupload={onReupload} onApprove={onApprove} onDelete={onDeleteUpload} />}
       </aside>
@@ -649,7 +672,74 @@ function DetailPanel({
 }
 function DetailActions({ children }: { children: React.ReactNode }) { return <div className="detail-actions">{children}</div> }
 function DetailMeta({ label, value }: { label: string; value: React.ReactNode }) { return <div className="detail-meta"><span>{label}</span><strong>{value}</strong></div> }
-function TopicDetail({ topic, script, onGenerate, onProduceVideo, onReject, onDelete }: { topic: Topic; script?: Script; onGenerate: (topic: Topic) => void; onProduceVideo: (scriptId: string) => void; onReject: (id: string) => void; onDelete: (id: string) => void }) { return <div className="detail-body"><div className="detail-status-row"><StatusBadge status={topic.status} /><span className="muted">Added {formatDate(topic.createdAt)}</span></div><div className="detail-meta-grid"><DetailMeta label="Niche" value={topic.niche} /><DetailMeta label="Source" value={<span className="source-label"><span className={`source-dot source-${topic.source}`} />{topic.source}</span>} /><DetailMeta label="Trend score" value={`${topic.metrics.trendScore}/100`} /><DetailMeta label="Competition" value={topic.metrics.competition} /></div><div className="detail-section"><span className="detail-label">Why this topic</span><p className="detail-copy">{topic.rationale || 'No rationale has been recorded for this topic.'}</p></div><div className="metrics-json"><div className="json-head"><span>Performance signals</span><Icon name="copy" size={14} /></div><pre>{JSON.stringify(topic.metrics, null, 2)}</pre></div><div className="detail-section"><div className="linked-heading"><span className="detail-label">Linked script</span>{script && <StatusBadge status={script.status} />}</div>{script ? <div className="script-preview"><strong>{script.hook}</strong><p>{script.text}</p><div className="script-footer"><span><Icon name="clock" size={14} /> {script.durationSec}s</span><span>{script.tagsSuggestion.slice(0, 2).map(tag => `#${tag}`).join(' ')}</span></div></div> : <EmptyState title="No script attached" description="Generate a script to move this topic into production." />}</div><DetailActions>{script ? <><ActionButton icon="film" variant="primary" onClick={() => onProduceVideo(script.id)}>Produce video Short</ActionButton><ActionButton icon="spark" variant="secondary" onClick={() => onGenerate(topic)}>Regenerate script</ActionButton></> : <ActionButton icon="spark" variant="primary" onClick={() => onGenerate(topic)}>Generate script</ActionButton>}{topic.status !== 'rejected' && <ActionButton icon="x" variant="ghost" onClick={() => onReject(topic.id)}>Reject topic</ActionButton>}<ActionButton icon="trash" variant="danger" onClick={() => onDelete(topic.id)}>Delete topic</ActionButton></DetailActions></div> }
+function TopicDetail({ topic, script, onGenerate, onProduceVideo, onReject, onDelete, onEvaluateJudge }: { topic: Topic; script?: Script; onGenerate: (topic: Topic) => void; onProduceVideo: (scriptId: string) => void; onReject: (id: string) => void; onDelete: (id: string) => void; onEvaluateJudge: (scriptId: string) => void }) {
+  const isApproved = script?.judgeScore !== undefined ? script.judgeScore >= 9.0 : script?.status === 'approved'
+  return (
+    <div className="detail-body">
+      <div className="detail-status-row"><StatusBadge status={topic.status} /><span className="muted">Added {formatDate(topic.createdAt)}</span></div>
+      
+      {script && (
+        <div className={`judge-card ${isApproved ? 'judge-pass' : 'judge-fail'}`}>
+          <div className="judge-head">
+            <div className="judge-badge-wrap">
+              <span className="judge-icon"><Icon name="spark" size={16} /></span>
+              <strong>LLM Judge Evaluation</strong>
+            </div>
+            {script.judgeScore !== undefined ? (
+              <span className={`judge-score-tag ${isApproved ? 'tag-approved' : 'tag-rejected'}`}>
+                ⭐ {script.judgeScore}/10 · {isApproved ? 'APPROVED (≥9.0)' : 'REJECTED (<9.0)'}
+              </span>
+            ) : (
+              <span className="judge-score-tag tag-pending">Needs Evaluation</span>
+            )}
+          </div>
+          {script.judgeFeedback && (
+            <p className="judge-feedback">“{script.judgeFeedback}”</p>
+          )}
+          {script.judgeCriteria && (
+            <div className="judge-criteria-grid">
+              <div><span>Hook (0-2.5)</span><strong>{script.judgeCriteria.hookScore}/2.5</strong></div>
+              <div><span>Retention (0-2.5)</span><strong>{script.judgeCriteria.retentionScore}/2.5</strong></div>
+              <div><span>Virality (0-2.5)</span><strong>{script.judgeCriteria.viralityScore}/2.5</strong></div>
+              <div><span>Pacing (0-2.5)</span><strong>{script.judgeCriteria.pacingScore}/2.5</strong></div>
+            </div>
+          )}
+          <button className="judge-eval-btn" onClick={() => onEvaluateJudge(script.id)}>
+            <Icon name="refresh" size={13} /> Re-evaluate with LLM Judge
+          </button>
+        </div>
+      )}
+
+      <div className="detail-meta-grid"><DetailMeta label="Niche" value={topic.niche} /><DetailMeta label="Source" value={<span className="source-label"><span className={`source-dot source-${topic.source}`} />{topic.source}</span>} /><DetailMeta label="Trend score" value={`${topic.metrics.trendScore}/100`} /><DetailMeta label="Competition" value={topic.metrics.competition} /></div>
+      <div className="detail-section"><span className="detail-label">Why this topic</span><p className="detail-copy">{topic.rationale || 'No rationale has been recorded for this topic.'}</p></div>
+      <div className="metrics-json"><div className="json-head"><span>Performance signals</span><Icon name="copy" size={14} /></div><pre>{JSON.stringify(topic.metrics, null, 2)}</pre></div>
+      <div className="detail-section">
+        <div className="linked-heading"><span className="detail-label">Linked script</span>{script && <StatusBadge status={script.status} />}</div>
+        {script ? (
+          <div className="script-preview">
+            <strong>{script.hook}</strong>
+            <p>{script.text}</p>
+            <div className="script-footer"><span><Icon name="clock" size={14} /> {script.durationSec}s</span><span>{script.tagsSuggestion.slice(0, 2).map(tag => `#${tag}`).join(' ')}</span></div>
+          </div>
+        ) : (
+          <EmptyState title="No script attached" description="Generate a script to run the AI Judge and move into production." />
+        )}
+      </div>
+      <DetailActions>
+        {script ? (
+          <>
+            {isApproved && <ActionButton icon="film" variant="primary" onClick={() => onProduceVideo(script.id)}>Produce video Short</ActionButton>}
+            <ActionButton icon="spark" variant="secondary" onClick={() => onGenerate(topic)}>Generate & Judge script</ActionButton>
+          </>
+        ) : (
+          <ActionButton icon="spark" variant="primary" onClick={() => onGenerate(topic)}>Generate & Judge script</ActionButton>
+        )}
+        {topic.status !== 'rejected' && <ActionButton icon="x" variant="ghost" onClick={() => onReject(topic.id)}>Reject topic</ActionButton>}
+        <ActionButton icon="trash" variant="danger" onClick={() => onDelete(topic.id)}>Delete topic</ActionButton>
+      </DetailActions>
+    </div>
+  )
+}
 function VideoDetail({ video, script, onRerender, onDelete }: { video: Video; script?: Script; onRerender: (id: string) => void; onDelete: (id: string) => void }) { return <div className="detail-body"><div className="detail-status-row"><StatusBadge status={video.status} /><span className="muted">Created {formatDate(video.createdAt, true)}</span></div><div className="detail-section"><span className="detail-label">Source script</span><div className="script-quote"><span>“</span>{script?.text || 'The linked script is not available.'}</div></div>{video.audioUrl && <div className="media-block"><span className="detail-label"><Icon name="audio" size={14} /> Voiceover</span><audio controls src={video.audioUrl} /></div>}<div className="media-block"><span className="detail-label"><Icon name="image" size={14} /> Visual assets · {video.visualAssets.length}</span>{video.visualAssets.length ? <div className="asset-grid">{video.visualAssets.map((asset, index) => { const source = typeof asset === 'string' ? asset : asset.path; return <img key={`${source}-${index}`} src={source} alt={typeof asset === 'string' ? 'Visual asset' : asset.role || 'Visual asset'} /> })}</div> : <div className="media-empty">No visual assets attached yet.</div>}</div>{video.renderManifest && <div className="detail-section"><span className="detail-label">Review checks</span><p className="detail-copy">{video.renderManifest.compliance?.join(' · ') || 'Asset and caption checks pending.'}</p>{video.renderManifest.factualSources?.map(source => <a className="youtube-detail-link" key={source} href={source} target="_blank" rel="noreferrer">Science source <Icon name="external" size={14} /></a>)}</div>}{video.finalVideoUrl && <div className="media-block"><span className="detail-label"><Icon name="video" size={14} /> Final video</span><video className="video-preview" controls poster={video.thumbnailUrl} src={video.finalVideoUrl} /></div>}<DetailActions><ActionButton icon="redo" variant="primary" onClick={() => onRerender(video.id)}>{video.status === 'failed' ? 'Retry render' : 'Re-render video'}</ActionButton><ActionButton icon="trash" variant="danger" onClick={() => onDelete(video.id)}>Delete video</ActionButton></DetailActions></div> }
 function UploadDetail({ upload, analytics, onResync, onReupload, onApprove, onDelete }: { upload: Upload; analytics?: Analytics; onResync: (id: string) => void; onReupload: (id: string) => void; onApprove: (id: string) => void; onDelete: (id: string) => void }) { return <div className="detail-body"><div className="detail-status-row"><StatusBadge status={upload.status} /><span className="muted">Created {formatDate(upload.createdAt, true)}</span></div>{upload.thumbnailUrl && <img className="detail-thumbnail" src={upload.thumbnailUrl} alt="Upload thumbnail" />}<div className="detail-meta-grid"><DetailMeta label="Scheduled at" value={formatDate(upload.scheduledAt, true)} /><DetailMeta label="YouTube ID" value={upload.youtubeVideoId || 'Not published'} /></div><div className="detail-section"><span className="detail-label">Description</span><p className="detail-copy">{upload.description || 'No description added.'}</p></div><div className="tag-list">{upload.tags.map(tag => <span key={tag}>#{tag}</span>)}</div>{upload.youtubeUrl && <a className="youtube-detail-link" href={upload.youtubeUrl} target="_blank" rel="noreferrer">Open on YouTube <Icon name="external" size={14} /></a>}<div className="analytics-card"><div className="analytics-card-head"><div><span className="eyebrow">Latest snapshot</span><strong>Performance overview</strong></div><span className="muted">{formatDate(analytics?.fetchedAt)}</span></div><div className="analytics-grid"><AnalyticsValue label="Views" value={analytics?.views ? formatNumber(analytics.views) : '—'} /><AnalyticsValue label="Avg. duration" value={analytics?.averageViewDurationSec ? `${analytics.averageViewDurationSec}s` : '—'} /><AnalyticsValue label="Swipe away" value={analytics?.swipeAwayRate ? `${analytics.swipeAwayRate}%` : '—'} /><AnalyticsValue label="Likes" value={analytics?.likes ? formatNumber(analytics.likes) : '—'} /><AnalyticsValue label="Comments" value={analytics?.comments ? formatNumber(analytics.comments) : '—'} /><AnalyticsValue label="Subs gained" value={analytics?.subscribersGained ? `+${formatNumber(analytics.subscribersGained)}` : '—'} /></div></div><DetailActions>{upload.status === 'review_required' && <ActionButton icon="check" variant="primary" onClick={() => onApprove(upload.id)}>Approve for 18:00 tomorrow</ActionButton>}<ActionButton icon="refresh" variant="secondary" onClick={() => onResync(upload.id)}>Resync analytics</ActionButton>{upload.status === 'failed' && <ActionButton icon="redo" variant="primary" onClick={() => onReupload(upload.id)}>Re-upload</ActionButton>}<ActionButton icon="trash" variant="danger" onClick={() => onDelete(upload.id)}>Delete upload</ActionButton></DetailActions></div> }
 function AnalyticsValue({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div> }

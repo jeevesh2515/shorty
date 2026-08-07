@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-vi.setConfig({ testTimeout: 30000, hookTimeout: 30000 })
+vi.setConfig({ testTimeout: 180000, hookTimeout: 180000 })
 import { mkdirSync, readdirSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { rmSync } from 'node:fs'

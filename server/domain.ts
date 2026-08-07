@@ -39,6 +39,13 @@ export type Topic = {
   updatedAt: string
 }
 
+export type JudgeCriteria = {
+  hookScore: number
+  retentionScore: number
+  viralityScore: number
+  pacingScore: number
+}
+
 export type Script = {
   id: string
   topicId: string
@@ -50,6 +57,10 @@ export type Script = {
   descriptionSuggestion?: string
   tagsSuggestion: string[]
   status: ScriptStatus
+  judgeScore?: number
+  judgeVerdict?: 'approved' | 'rejected'
+  judgeFeedback?: string
+  judgeCriteria?: JudgeCriteria
   createdAt: string
   updatedAt: string
 }

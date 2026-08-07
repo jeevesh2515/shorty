@@ -57,6 +57,8 @@ export function createHttpServer(db: ShortsDatabase, workflow: ShortsWorkflow, c
       const topicScript = url.pathname.match(/^\/api\/topics\/([^/]+)\/script$/)
       if (req.method === 'POST' && topicScript) { ok(res, await workflow.generateScript(topicScript[1])); return }
       if (req.method === 'GET' && url.pathname === '/api/scripts') { ok(res, db.listScripts()); return }
+      const scriptJudge = url.pathname.match(/^\/api\/scripts\/([^/]+)\/judge$/)
+      if (req.method === 'POST' && scriptJudge) { ok(res, await workflow.evaluateScriptWithJudge(scriptJudge[1])); return }
       const scriptStatus = url.pathname.match(/^\/api\/scripts\/([^/]+)\/status$/)
       if (req.method === 'PATCH' && scriptStatus) { const body = await readBody(req, config.maxBodyBytes); ok(res, db.updateScriptStatus(scriptStatus[1], body.status as never)); return }
       if (req.method === 'GET' && url.pathname === '/api/videos') { ok(res, db.listVideos()); return }
