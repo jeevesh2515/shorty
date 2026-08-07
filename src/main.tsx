@@ -11,7 +11,9 @@ if (posthogKey) {
   posthog.init(posthogKey, {
     api_host: posthogHost,
     person_profiles: 'identified_only',
+    defaults: '2026-05-30',
     autocapture: true,
+    capture_exceptions: true,
   })
 }
 
