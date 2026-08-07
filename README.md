@@ -107,17 +107,32 @@ Set `API_TOKEN` in production and keep all provider keys server-side only.
 
 ### Backend — Railway (free 500 hr/month)
 
+Railway uses the included `Dockerfile` automatically.
+
 1. Push this repo to GitHub.
 2. Go to https://railway.app → New Project → Deploy from GitHub.
-3. Railway auto-detects `railway.json` and runs `npm run build && npm run dev:api`.
+3. Railway detects the `Dockerfile` and builds the image (includes FFmpeg).
 4. Set environment variables in Railway Dashboard (copy from `.env.example`).
-5. Note your Railway URL (e.g. `https://shorty-api.railway.app`).
+5. Railway assigns a public URL (e.g. `https://shorty-api.railway.app`).
+6. Use that URL as your API root.
 
-### Frontend — Vercel (free forever)
+**Important:** Railway's filesystem is ephemeral. The SQLite database and
+rendered media are lost on redeploy. This is fine for a free-tier demo.
+For production, add a persistent volume in Railway or switch to a managed
+database.
+
+### Frontend — Option A: Railway (single service)
+
+The backend already serves the built frontend from `dist/`. If you deploy
+only the backend on Railway, open the Railway URL in a browser — the
+dashboard loads directly. No `VITE_API_URL` needed because the frontend
+uses same-origin relative API paths.
+
+### Frontend — Option B: Vercel (free forever)
 
 1. Go to https://vercel.com → New Project → Import from GitHub.
 2. Vercel auto-detects `vercel.json`.
-3. Set `VITE_API_URL=https://shorty-api.railway.app` in Vercel Environment Variables.
+3. Set `VITE_API_URL=https://<your-railway-url>` in Vercel Environment Variables.
 4. In `vercel.json`, update the `/api` proxy destination to your Railway URL.
 5. Deploy — your dashboard is live at `https://yourapp.vercel.app`.
 
