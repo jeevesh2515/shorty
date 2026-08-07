@@ -55,12 +55,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     ? (raw as LlmProvider)
     : 'local'
 
+  const dataDir = env.DATA_DIR || resolve(process.cwd(), 'data')
+
   return {
     port: Number(env.PORT || 8787),
-    dbPath: env.SHORTS_DB_PATH || resolve(process.cwd(), 'data/shorts-autopilot.sqlite'),
-    mediaDir: env.MEDIA_DIR || resolve(process.cwd(), 'data/media'),
+    dbPath: env.SHORTS_DB_PATH || resolve(dataDir, 'shorts-autopilot.sqlite'),
+    mediaDir: env.MEDIA_DIR || resolve(dataDir, 'media'),
     staticDir: env.STATIC_DIR || resolve(process.cwd(), 'dist'),
-    appOrigin: env.APP_ORIGIN || 'http://localhost:5173',
+    appOrigin: env.APP_ORIGIN || '*',
     apiToken: env.API_TOKEN,
     maxBodyBytes: Number(env.MAX_BODY_BYTES || 1_000_000),
 
