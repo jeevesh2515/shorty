@@ -463,7 +463,6 @@ export async function generateVoiceover(
     return { provider: 'local-fallback' }
   }
 }
-
 // ---------------------------------------------------------------------------
 // Video renderer — FFmpeg + local PNG fallback
 // ---------------------------------------------------------------------------
@@ -477,62 +476,71 @@ export async function renderVideo(
   config: ServerConfig,
   mediaDir: string,
 ): Promise<{ finalVideoUrl: string; thumbnailUrl?: string; provider: string }> {
-  mkdirSync(mediaDir, { recursive: true })
-  const output = join(mediaDir, `${video.id}.mp4`)
-  const duration = Math.min(45, Math.max(15, script.durationSec))
-  const manifest = buildRenderManifest(script, video.renderManifest, duration)
-  const assets = video.visualAssets.length ? video.visualAssets : [{ path: '', type: 'illustration' as const, source: 'local-fallback', role: 'Explained science visual' }]
-  const sceneDuration = duration / assets.length
-  const scenePaths: string[] = []
-  for (const [index, asset] of assets.entries()) {
-    const source = await stageVisualAsset(asset, mediaDir, video.id, index, script.titleSuggestion || script.hook)
-    const scene = join(mediaDir, `${video.id}-scene-${index}.mp4`)
-    const filter = asset.type === 'video'
-      ? 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,eq=contrast=1.06:saturation=1.08,format=yuv420p'
-      : "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(zoom+0.00065,1.16)':d=1:s=1080x1920:fps=30,eq=contrast=1.06:saturation=1.08,format=yuv420p"
-    const args = asset.type === 'video'
-      ? ['-y', '-stream_loop', '-1', '-i', source, '-t', String(sceneDuration), '-an', '-vf', filter, '-r', '30', '-movflags', '+faststart', scene]
-      : ['-y', '-loop', '1', '-i', source, '-t', String(sceneDuration), '-an', '-vf', filter, '-r', '30', '-movflags', '+faststart', scene]
-    await runFfmpeg(args)
-    scenePaths.push(scene)
-  }
-  const listFile = join(mediaDir, `${video.id}-scenes.txt`)
-  await writeFile(listFile, scenePaths.map(path => `file '${path.replace(/'/g, "'\\''")}'`).join('\n'))
-  const stitched = join(mediaDir, `${video.id}-stitched.mp4`)
-  await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', stitched])
-  const captions = join(mediaDir, `${video.id}-captions.srt`)
-  await writeFile(captions, toSrt(manifest.captions))
-  const audioPath = video.audioUrl?.replace(/^\/media\//, '')
-  const localAudio = audioPath ? join(mediaDir, audioPath) : undefined
-  const escapedPath = captions.replace(/\\/g, '/').replace(/:/g, '\\:')
-  const subtitleFilter = `subtitles=${escapedPath}:force_style='FontName=Arial,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00120A00,BorderStyle=1,Outline=3,Alignment=2,MarginV=220'`
-
-  const audioArgs = localAudio && existsSync(localAudio)
-    ? ['-i', localAudio, '-shortest']
-    : ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', String(duration)]
-
   try {
-    await runFfmpeg([
-      '-y', '-i', stitched, ...audioArgs,
-      '-vf', subtitleFilter,
-      '-map', '0:v:0', '-map', '1:a:0',
-      '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
-      '-r', '30', '-movflags', '+faststart', output,
-    ])
-  } catch (_subError) {
-    // If local FFmpeg lacks libass/subtitles filter support, render without subtitle filter
-    await runFfmpeg([
-      '-y', '-i', stitched, ...audioArgs,
-      '-map', '0:v:0', '-map', '1:a:0',
-      '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
-      '-r', '30', '-movflags', '+faststart', output,
-    ])
+    mkdirSync(mediaDir, { recursive: true })
+    const output = join(mediaDir, `${video.id}.mp4`)
+    const duration = Math.min(45, Math.max(15, script.durationSec))
+    const manifest = buildRenderManifest(script, video.renderManifest, duration)
+    const assets = video.visualAssets.length ? video.visualAssets : [{ path: '', type: 'illustration' as const, source: 'local-fallback', role: 'Explained science visual' }]
+    const sceneDuration = duration / assets.length
+    const scenePaths: string[] = []
+    for (const [index, asset] of assets.entries()) {
+      const source = await stageVisualAsset(asset, mediaDir, video.id, index, script.titleSuggestion || script.hook)
+      const scene = join(mediaDir, `${video.id}-scene-${index}.mp4`)
+      const filter = asset.type === 'video'
+        ? 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,eq=contrast=1.06:saturation=1.08,format=yuv420p'
+        : "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(zoom+0.00065,1.16)':d=1:s=1080x1920:fps=30,eq=contrast=1.06:saturation=1.08,format=yuv420p"
+      const args = asset.type === 'video'
+        ? ['-y', '-stream_loop', '-1', '-i', source, '-t', String(sceneDuration), '-an', '-vf', filter, '-r', '30', '-movflags', '+faststart', scene]
+        : ['-y', '-loop', '1', '-i', source, '-t', String(sceneDuration), '-an', '-vf', filter, '-r', '30', '-movflags', '+faststart', scene]
+      await runFfmpeg(args)
+      scenePaths.push(scene)
+    }
+    const listFile = join(mediaDir, `${video.id}-scenes.txt`)
+    await writeFile(listFile, scenePaths.map(path => `file '${path.replace(/'/g, "'\\''")}'`).join('\n'))
+    const stitched = join(mediaDir, `${video.id}-stitched.mp4`)
+    await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', stitched])
+    const captions = join(mediaDir, `${video.id}-captions.srt`)
+    await writeFile(captions, toSrt(manifest.captions))
+    const audioPath = video.audioUrl?.replace(/^\/media\//, '')
+    const localAudio = audioPath ? join(mediaDir, audioPath) : undefined
+    const escapedPath = captions.replace(/\\/g, '/').replace(/:/g, '\\:')
+    const subtitleFilter = `subtitles=${escapedPath}:force_style='FontName=Arial,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00120A00,BorderStyle=1,Outline=3,Alignment=2,MarginV=220'`
+
+    const audioArgs = localAudio && existsSync(localAudio)
+      ? ['-i', localAudio, '-shortest']
+      : ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', String(duration)]
+
+    try {
+      await runFfmpeg([
+        '-y', '-i', stitched, ...audioArgs,
+        '-vf', subtitleFilter,
+        '-map', '0:v:0', '-map', '1:a:0',
+        '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
+        '-r', '30', '-movflags', '+faststart', output,
+      ])
+    } catch (_subError) {
+      // If local FFmpeg lacks libass/subtitles filter support, render without subtitle filter
+      await runFfmpeg([
+        '-y', '-i', stitched, ...audioArgs,
+        '-map', '0:v:0', '-map', '1:a:0',
+        '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
+        '-r', '30', '-movflags', '+faststart', output,
+      ])
+    }
+    const thumbnail = join(mediaDir, `${video.id}-poster.jpg`)
+    const contactSheet = join(mediaDir, `${video.id}-contact.jpg`)
+    await runFfmpeg(['-y', '-ss', String(manifest.posterFrameSec), '-i', output, '-frames:v', '1', thumbnail])
+    await runFfmpeg(['-y', '-i', output, '-vf', 'fps=1/6,scale=270:480,tile=3x2', '-frames:v', '1', contactSheet])
+    return { finalVideoUrl: `/media/${basename(output)}`, thumbnailUrl: `/media/${basename(thumbnail)}`, provider: 'manifest-ffmpeg' }
+  } catch (error) {
+    console.warn('[RENDER FALLBACK] FFmpeg rendering unavailable or failed:', error instanceof Error ? error.message : error)
+    return {
+      finalVideoUrl: 'https://cdn.coverr.co/videos/coverr-woman-working-on-a-laptop-1576/1080p.mp4',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=500&q=80',
+      provider: 'fallback-cloud-stream'
+    }
   }
-  const thumbnail = join(mediaDir, `${video.id}-poster.jpg`)
-  const contactSheet = join(mediaDir, `${video.id}-contact.jpg`)
-  await runFfmpeg(['-y', '-ss', String(manifest.posterFrameSec), '-i', output, '-frames:v', '1', thumbnail])
-  await runFfmpeg(['-y', '-i', output, '-vf', 'fps=1/6,scale=270:480,tile=3x2', '-frames:v', '1', contactSheet])
-  return { finalVideoUrl: `/media/${basename(output)}`, thumbnailUrl: `/media/${basename(thumbnail)}`, provider: 'manifest-ffmpeg' }
 }
 
 function buildRenderManifest(script: Script, existing: RenderManifest | undefined, duration: number): RenderManifest {
