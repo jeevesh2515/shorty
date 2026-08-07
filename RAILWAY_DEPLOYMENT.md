@@ -59,6 +59,39 @@ In Railway → Service Settings → **Variables**, add the following:
 | `YOUTUBE_CLIENT_SECRET` | OAuth2 Client Secret |
 | `YOUTUBE_REFRESH_TOKEN` | OAuth2 Refresh Token |
 
+#### Automation (Optional):
+| Variable | Value | Description |
+|---|---|---|
+| `ENABLE_SCHEDULER` | `true` | Enable the hourly scheduler for automated runs |
+| `DEFAULT_NICHE` | `Productivity` | Default niche for automated topic discovery |
+| `REVIEW_HOUR_LONDON` | `9` | Hour (London time) when the scheduler runs |
+| `AUTO_APPROVE` | `true` | Auto-approve videos after render |
+| `AUTO_PUBLISH` | `true` | Auto-publish approved uploads to YouTube |
+
+> **Note:** `AUTO_APPROVE` and `AUTO_PUBLISH` can also be toggled from the Settings page in the dashboard.
+
+### YouTube OAuth Setup
+
+To enable actual YouTube uploads (not just scheduled placeholders):
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/) → **APIs & Services** → **Credentials**.
+2. Create an **OAuth 2.0 Client ID** (Web application).
+3. Add your Railway domain to **Authorized redirect URIs**:
+   ```
+   https://<your-railway-app>.railway.app/api/auth/youtube/callback
+   ```
+4. Copy the **Client ID** and **Client Secret** into Railway variables:
+   - `YOUTUBE_CLIENT_ID`
+   - `YOUTUBE_CLIENT_SECRET`
+5. In the dashboard Settings, click **Connect YouTube** and complete the OAuth flow.
+6. The refresh token is stored securely in the SQLite database.
+
+### YouTube Data API Setup (for topic discovery)
+
+1. In Google Cloud Console, enable **YouTube Data API v3**.
+2. Create an **API Key** and restrict it to YouTube Data API v3.
+3. Add `YOUTUBE_API_KEY` to Railway variables.
+
 ---
 
 ## 3. How the Build Works Automatically
@@ -77,4 +110,6 @@ Once deployed, Railway generates a URL for your service (e.g. `https://shorts-au
 
 1. Open the domain in your browser — the dark amber **Shorts Autopilot Dashboard** will load.
 2. Go to **Settings** — verify your active LLM provider shows a green **Ready** dot.
-3. Click **Run manual Short** — your production container will generate a topic, script, render video with FFmpeg, and show it on your dashboard!
+3. (Optional) Click **Connect YouTube** and complete the OAuth flow to enable publishing.
+4. (Optional) Enable **Auto-approve** and **Auto-publish** in Settings for fully autonomous operation.
+5. Click **Run manual Short** — your production container will generate a topic, script, render video with FFmpeg, generate an AI thumbnail concept, and show it on your dashboard!

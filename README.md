@@ -37,8 +37,11 @@ moment you paste a single key from `REQUIRED_SECRETS.md`.
   - `gemini` — low-cost Gemini Flash (~$0.002/script).
   - `openai` — GPT-4o-mini (~$0.01/script).
 - YouTube Data API v3, Pexels, Speaches/Dograh TTS adapters.
-- YouTube OAuth upload with scheduled publish support.
-- Optional daily scheduler hook.
+- YouTube OAuth upload with scheduled publish support — connect from
+  the Settings page, no manual token setup required.
+- Optional daily scheduler hook with **auto-approve** and **auto-publish**
+  toggles for fully autonomous operation.
+- AI-generated thumbnail concepts via free Pollinations.ai image API.
 - Docker deployment with FFmpeg preinstalled.
 - Vitest repository/provider/API/workflow tests.
 - Vercel (frontend) + Railway (backend) deployment configs.
@@ -114,7 +117,9 @@ Railway uses the included `Dockerfile` automatically.
 3. Railway detects the `Dockerfile` and builds the image (includes FFmpeg).
 4. Set environment variables in Railway Dashboard (copy from `.env.example`).
 5. Railway assigns a public URL (e.g. `https://shorty-api.railway.app`).
-6. Use that URL as your API root.
+6. Open the URL — the dashboard loads directly with same-origin API calls.
+7. In Settings, click **Connect YouTube** to complete OAuth (optional).
+8. Enable **Auto-approve** and **Auto-publish** for fully autonomous runs (optional).
 
 **Important:** Railway's filesystem is ephemeral. The SQLite database and
 rendered media are lost on redeploy. This is fine for a free-tier demo.

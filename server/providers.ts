@@ -9,7 +9,7 @@ import { buildGradientPng } from './png.js'
 
 const execFileAsync = promisify(execFile)
 
-async function requestJson(url: string, init: RequestInit = {}) {
+export async function requestJson(url: string, init: RequestInit = {}) {
   const response = await fetch(url, init)
   const body = await response.text()
   let parsed: unknown
@@ -281,6 +281,10 @@ export async function generateVoiceover(
 // ---------------------------------------------------------------------------
 // Video renderer — FFmpeg + local PNG fallback
 // ---------------------------------------------------------------------------
+async function runFfmpeg(args: string[]) {
+  return execFileAsync('ffmpeg', ['-loglevel', 'error', ...args], { maxBuffer: 50 * 1024 * 1024 })
+}
+
 export async function renderVideo(
   video: Video,
   script: Script,
@@ -303,13 +307,13 @@ export async function renderVideo(
     const args = asset.type === 'video'
       ? ['-y', '-stream_loop', '-1', '-i', source, '-t', String(sceneDuration), '-an', '-vf', filter, '-r', '30', '-movflags', '+faststart', scene]
       : ['-y', '-loop', '1', '-i', source, '-t', String(sceneDuration), '-an', '-vf', filter, '-r', '30', '-movflags', '+faststart', scene]
-    await execFileAsync('ffmpeg', args)
+    await runFfmpeg(args)
     scenePaths.push(scene)
   }
   const listFile = join(mediaDir, `${video.id}-scenes.txt`)
   await writeFile(listFile, scenePaths.map(path => `file '${path.replace(/'/g, "'\\''")}'`).join('\n'))
   const stitched = join(mediaDir, `${video.id}-stitched.mp4`)
-  await execFileAsync('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', stitched])
+  await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', stitched])
   const captions = join(mediaDir, `${video.id}-captions.srt`)
   await writeFile(captions, toSrt(manifest.captions))
   const audioPath = video.audioUrl?.replace(/^\/media\//, '')
@@ -322,7 +326,7 @@ export async function renderVideo(
     : ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', String(duration)]
 
   try {
-    await execFileAsync('ffmpeg', [
+    await runFfmpeg([
       '-y', '-i', stitched, ...audioArgs,
       '-vf', subtitleFilter,
       '-map', '0:v:0', '-map', '1:a:0',
@@ -331,7 +335,7 @@ export async function renderVideo(
     ])
   } catch (_subError) {
     // If local FFmpeg lacks libass/subtitles filter support, render without subtitle filter
-    await execFileAsync('ffmpeg', [
+    await runFfmpeg([
       '-y', '-i', stitched, ...audioArgs,
       '-map', '0:v:0', '-map', '1:a:0',
       '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
@@ -340,8 +344,8 @@ export async function renderVideo(
   }
   const thumbnail = join(mediaDir, `${video.id}-poster.jpg`)
   const contactSheet = join(mediaDir, `${video.id}-contact.jpg`)
-  await execFileAsync('ffmpeg', ['-y', '-ss', String(manifest.posterFrameSec), '-i', output, '-frames:v', '1', thumbnail])
-  await execFileAsync('ffmpeg', ['-y', '-i', output, '-vf', 'fps=1/6,scale=270:480,tile=3x2', '-frames:v', '1', contactSheet])
+  await runFfmpeg(['-y', '-ss', String(manifest.posterFrameSec), '-i', output, '-frames:v', '1', thumbnail])
+  await runFfmpeg(['-y', '-i', output, '-vf', 'fps=1/6,scale=270:480,tile=3x2', '-frames:v', '1', contactSheet])
   return { finalVideoUrl: `/media/${basename(output)}`, thumbnailUrl: `/media/${basename(thumbnail)}`, provider: 'manifest-ffmpeg' }
 }
 
@@ -499,4 +503,26 @@ export async function fetchYouTubeAnalytics(
       fetchedAt,
     }
   })
+}
+
+// ---------------------------------------------------------------------------
+// Thumbnail concept generation — free Pollinations.ai image generation
+// ---------------------------------------------------------------------------
+export async function generateThumbnailConcept(
+  script: Script,
+  config: ServerConfig,
+  mediaDir: string,
+): Promise<{ thumbnailUrl?: string; provider: string }> {
+  const prompt = `YouTube Shorts thumbnail, high contrast, bold text "${script.titleSuggestion || script.hook}", engaging visual, 9:16 vertical, no watermark, professional thumbnail design`
+  const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1280&height=720&nologo=true&seed=${Date.now()}`
+  try {
+    const response = await fetch(imageUrl, { signal: AbortSignal.timeout(10_000) })
+    if (!response.ok) throw new Error(`Image generation failed (${response.status})`)
+    const fileName = `thumb-${script.id}-${Date.now()}.jpg`
+    const path = join(mediaDir, fileName)
+    await writeFile(path, Buffer.from(await response.arrayBuffer()))
+    return { thumbnailUrl: `/media/${fileName}`, provider: 'pollinations-ai' }
+  } catch {
+    return { provider: 'local-fallback' }
+  }
 }

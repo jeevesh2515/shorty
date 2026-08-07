@@ -5,7 +5,7 @@ import type { ServerConfig } from './config.js'
 import { ShortsDatabase, stableIdempotencyKey } from './db.js'
 import { DomainError, nowIso } from './domain.js'
 import { UsageLedger } from './usage.js'
-import { discoverTopics, generateScript, generateVoiceover, renderVideo, searchVisuals, uploadToYouTube, fetchYouTubeAnalytics } from './providers.js'
+import { discoverTopics, generateScript, generateVoiceover, generateThumbnailConcept, renderVideo, searchVisuals, uploadToYouTube, fetchYouTubeAnalytics } from './providers.js'
 
 export class ShortsWorkflow {
   private readonly usage: UsageLedger
@@ -74,9 +74,11 @@ export class ShortsWorkflow {
       const updated = this.db.getVideo(videoId)
       if (!updated) throw new Error('Video disappeared during render')
       const result = await renderVideo(updated, script, this.config, this.config.mediaDir)
+      const thumbnailConcept = await generateThumbnailConcept(script, this.config, this.config.mediaDir)
+      const thumbnailUrl = thumbnailConcept.thumbnailUrl || result.thumbnailUrl
       const status = this.reviewModeActive() ? 'review_required' : 'ready'
-      const ready = this.db.updateVideo(videoId, { status, finalVideoUrl: result.finalVideoUrl, thumbnailUrl: result.thumbnailUrl })
-      return { video: ready, providers: { visuals: 'configured-or-local', voice: voice.provider, renderer: result.provider } }
+      const ready = this.db.updateVideo(videoId, { status, finalVideoUrl: result.finalVideoUrl, thumbnailUrl })
+      return { video: ready, providers: { visuals: 'configured-or-local', voice: voice.provider, renderer: result.provider, thumbnail: thumbnailConcept.provider } }
     } catch (error) {
       this.db.updateVideo(videoId, { status: 'failed' })
       this.db.audit('job', videoId, 'failed', 'failed', error instanceof Error ? error.message : 'Video production failed')
@@ -84,14 +86,14 @@ export class ShortsWorkflow {
     }
   }
 
-  async createUpload(videoId: string, input: { title: string; description?: string; tags?: string[]; scheduledAt?: string }) {
+  async createUpload(videoId: string, input: { title: string; description?: string; tags?: string[]; scheduledAt?: string; thumbnailUrl?: string }) {
     const video = this.db.getVideo(videoId)
     if (!video) throw new DomainError('NOT_FOUND', `Video ${videoId} was not found`, 404)
     const key = stableIdempotencyKey([videoId, input.title, input.scheduledAt || 'now'])
     const existing = this.db.getUploadByKey(key)
     if (existing) return existing
     const needsReview = this.reviewModeActive()
-    return this.db.createUpload({ id: randomUUID(), videoId, title: input.title, description: input.description, tags: input.tags || [], scheduledAt: input.scheduledAt, status: needsReview ? 'review_required' : input.scheduledAt ? 'scheduled' : 'pending', idempotencyKey: key, createdAt: nowIso(), updatedAt: nowIso() })
+    return this.db.createUpload({ id: randomUUID(), videoId, title: input.title, description: input.description, tags: input.tags || [], scheduledAt: input.scheduledAt, status: needsReview ? 'review_required' : input.scheduledAt ? 'scheduled' : 'pending', thumbnailUrl: input.thumbnailUrl, idempotencyKey: key, createdAt: nowIso(), updatedAt: nowIso() })
   }
 
   async approveForPublish(uploadId: string) {
@@ -117,7 +119,7 @@ export class ShortsWorkflow {
     const path = join(this.config.mediaDir, fileName)
     if (!existsSync(path)) throw new DomainError('MEDIA_NOT_FOUND', `Rendered file is missing: ${path}`, 409)
     try {
-      const result = await uploadToYouTube(path, upload.title, upload.description || '', upload.tags, upload.scheduledAt, this.config)
+      const result = await uploadToYouTube(path, upload.title, upload.description || '', upload.tags, upload.scheduledAt, this.youtubeConfig())
       return this.db.updateUpload(uploadId, result)
     } catch (error) {
       this.db.updateUpload(uploadId, { status: 'failed' })
@@ -129,7 +131,7 @@ export class ShortsWorkflow {
   async syncAnalytics() {
     const published = this.db.listUploads().filter(upload => upload.youtubeVideoId).map(upload => ({ uploadId: upload.id, youtubeVideoId: upload.youtubeVideoId! }))
     if (!published.length) return []
-    const records = await fetchYouTubeAnalytics(published, this.config)
+    const records = await fetchYouTubeAnalytics(published, this.youtubeConfig())
     records.forEach(record => this.db.upsertAnalytics(record))
     return records
   }
@@ -141,23 +143,41 @@ export class ShortsWorkflow {
     if (!script) throw new Error('Script generation returned no script')
     const video = await this.createVideo(script.id)
     const produced = await this.produceVideo(video.id)
-    const upload = await this.createUpload(video.id, { title: script.titleSuggestion || topic.title, description: script.descriptionSuggestion, tags: script.tagsSuggestion })
+    const upload = await this.createUpload(video.id, { title: script.titleSuggestion || topic.title, description: script.descriptionSuggestion, tags: script.tagsSuggestion, thumbnailUrl: produced.video?.thumbnailUrl })
     return { topic, script, video: produced.video, upload, providers: generated.provider }
   }
 
   async runScheduled() {
     if (this.config.automationPaused || this.db.getSetting('automation_paused') === 'true') return { skipped: true, reason: 'automation_paused' }
     const london = londonParts(new Date())
-    if (london.hour !== this.config.reviewHourLondon) return { skipped: true, reason: 'outside_review_window', hour: london.hour }
     const day = `${london.year}-${String(london.month).padStart(2, '0')}-${String(london.day).padStart(2, '0')}`
     const key = `scheduled:${day}`
     if (this.db.getSetting(key) === 'complete') return { skipped: true, reason: 'already_completed', day }
+    if (london.hour !== this.config.reviewHourLondon) return { skipped: true, reason: 'outside_review_window', hour: london.hour }
     this.db.setSetting(key, 'running')
-    try { const result = await this.runManual({ niche: process.env.DEFAULT_NICHE || 'Productivity' }); this.db.setSetting(key, 'complete'); return result } catch (error) { this.db.setSetting(key, 'failed'); throw error }
+    try {
+      const result = await this.runManual({ niche: process.env.DEFAULT_NICHE || 'Productivity' })
+      const upload = result.upload
+      const autoApprove = this.config.autoApprove || this.db.getSetting('auto_approve') === 'true'
+      const autoPublish = this.config.autoPublish || this.db.getSetting('auto_publish') === 'true'
+      if (autoApprove && upload.status === 'review_required') {
+        await this.approveForPublish(upload.id)
+      }
+      if (autoPublish && (upload.status === 'approved_for_publish' || upload.status === 'scheduled')) {
+        await this.publishUpload(upload.id)
+      }
+      this.db.setSetting(key, 'complete')
+      return result
+    } catch (error) { this.db.setSetting(key, 'failed'); throw error }
   }
+
+  async deleteTopic(topicId: string) { return this.db.deleteTopic(topicId) }
+  async deleteVideo(videoId: string) { return this.db.deleteVideo(videoId) }
+  async deleteUpload(uploadId: string) { return this.db.deleteUpload(uploadId) }
 
   usageSummary() { return this.usage.summary() }
   private reviewModeActive() { return this.db.listUploads().filter(upload => ['approved_for_publish', 'scheduled', 'published'].includes(upload.status)).length < this.config.reviewLimit }
+  private youtubeConfig() { const dbToken = this.db.getSetting('youtube_refresh_token'); return dbToken ? { ...this.config, youtubeRefreshToken: dbToken } : this.config }
 }
 
 function londonParts(date: Date) {

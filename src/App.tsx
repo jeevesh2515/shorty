@@ -99,6 +99,8 @@ type AppState = {
   readiness: ProviderReadiness | null
   usage: UsageSummary | null
   automationPaused: boolean
+  autoApprove: boolean
+  autoPublish: boolean
 }
 
 type ProviderReadiness = {
@@ -169,6 +171,7 @@ type IconName =
   | 'switch'
   | 'cpu'
   | 'dot'
+  | 'trash'
 
 function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const common = { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
@@ -208,6 +211,7 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     case 'switch': return <svg {...common}><path d="M3 8h12a4 4 0 0 1 0 8H5" /><path d="M21 16H9a4 4 0 0 1 0-8h10" /><path d="m5 6-2 2 2 2M19 14l2 2-2 2" /></svg>
     case 'cpu': return <svg {...common}><rect x="5" y="5" width="14" height="14" rx="2" /><rect x="9" y="9" width="6" height="6" rx="1" /><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3" /></svg>
     case 'dot': return <svg {...common} fill="currentColor" stroke="none"><circle cx="12" cy="12" r="4" /></svg>
+    case 'trash': return <svg {...common}><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6" /></svg>
   }
 }
 
@@ -240,6 +244,8 @@ const daysFromNow = (days: number, hours = 10) => {
 // Empty initial state — real data comes from the API backend
 const emptyState: AppState = {
   automationPaused: false,
+  autoApprove: false,
+  autoPublish: false,
   audit: [],
   readiness: null,
   usage: null,
@@ -295,8 +301,8 @@ function App() {
     if (!API_MODE) return
     try {
       const remote = await apiRequest<{ topics: Topic[]; scripts: Script[]; videos: Video[]; uploads: Upload[]; analytics: Analytics[]; audit: AuditEvent[] }>('/api/state')
-      const readiness = await apiRequest<{ providers: ProviderReadiness; config: { automationPaused: boolean; llmProvider: string; monthlyAiBudgetUsd: number }; usage: UsageSummary }>('/api/readiness')
-      setState(current => ({ ...current, ...remote, readiness: readiness.providers, usage: readiness.usage, automationPaused: readiness.config.automationPaused }))
+      const readiness = await apiRequest<{ providers: ProviderReadiness; config: { automationPaused: boolean; llmProvider: string; monthlyAiBudgetUsd: number; autoApprove: boolean; autoPublish: boolean }; usage: UsageSummary }>('/api/readiness')
+      setState(current => ({ ...current, ...remote, readiness: readiness.providers, usage: readiness.usage, automationPaused: readiness.config.automationPaused, autoApprove: readiness.config.autoApprove, autoPublish: readiness.config.autoPublish }))
       setConnection('connected')
     } catch {
       setConnection('disconnected')
@@ -400,11 +406,73 @@ function App() {
   const reupload = async (uploadId: string) => { if (API_MODE) { try { await apiRequest(`/api/uploads/${uploadId}/retry`, { method: 'POST' }); await refreshFromApi(); showToast('Upload retried successfully') } catch (error) { showToast(error instanceof Error ? error.message : 'Upload retry failed') }; return } updateState(current => ({ ...current, uploads: current.uploads.map(upload => upload.id === uploadId ? { ...upload, status: 'scheduled', scheduledAt: daysFromNow(1, 9), youtubeVideoId: undefined, youtubeUrl: undefined } : upload) })); showToast('Upload reset and scheduled for the next available slot') }
   const approveForPublish = async (uploadId: string) => { if (API_MODE) { try { await apiRequest(`/api/uploads/${uploadId}/approve`, { method: 'POST' }); await refreshFromApi(); showToast('Approved for 18:00 Europe/London tomorrow') } catch (error) { showToast(error instanceof Error ? error.message : 'Approval failed') }; return } updateState(current => ({ ...current, uploads: current.uploads.map(upload => upload.id === uploadId ? { ...upload, status: 'approved_for_publish', scheduledAt: daysFromNow(1, 18) } : upload) })); showToast('Approved for 18:00 tomorrow') }
   const toggleAutomation = async () => { const next = !state.automationPaused; if (API_MODE) { try { await apiRequest('/api/settings/automation', { method: 'PATCH', body: JSON.stringify({ paused: next }) }); await refreshFromApi(); showToast(next ? 'Autopilot paused' : 'Autopilot resumed') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to update automation') }; return } updateState(current => ({ ...current, automationPaused: next })); showToast(next ? 'Autopilot paused' : 'Autopilot resumed') }
+  const connectYouTube = async () => { if (!API_MODE) return; try { const redirect = await apiRequest<{ url: string }>('/api/auth/youtube'); window.location.href = redirect.url } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to start YouTube OAuth') } }
+  const disconnectYouTube = async () => { if (!API_MODE) return; try { await apiRequest('/api/auth/youtube/disconnect', { method: 'POST' }); await refreshFromApi(); showToast('YouTube disconnected') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to disconnect YouTube') } }
+  const updateAutoPublish = async (autoApprove: boolean, autoPublish: boolean) => { if (!API_MODE) { updateState(current => ({ ...current, autoApprove, autoPublish })); return } try { await apiRequest('/api/settings/auto-publish', { method: 'PATCH', body: JSON.stringify({ autoApprove, autoPublish }) }); await refreshFromApi(); showToast('Auto-publish settings updated') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to update auto-publish settings') } }
   const createTopic = async () => {
     if (API_MODE) { try { await apiRequest('/api/topics', { method: 'POST', body: JSON.stringify({ title: 'A new idea from the operator queue', niche: 'Productivity', source: 'manual', rationale: 'Added manually for the next content review.', metrics: { trendScore: 0, searchLift: 0, competition: 'Unscored' } }) }); await refreshFromApi(); showToast('New topic added to the idea queue') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to add topic') }; return }
     const topic: Topic = { id: `topic-${Date.now()}`, title: 'A new idea from the operator queue', niche: 'Productivity', source: 'manual', status: 'new', metrics: { trendScore: 0, searchLift: 0, competition: 'Unscored' }, rationale: 'Added manually for the next content review.', createdAt: new Date().toISOString() }
     updateState(current => ({ ...current, topics: [topic, ...current.topics] }))
     showToast('New topic added to the idea queue')
+  }
+
+  const deleteTopic = async (topicId: string) => {
+    if (API_MODE) {
+      try {
+        await apiRequest(`/api/topics/${topicId}`, { method: 'DELETE' })
+        await refreshFromApi()
+        closeDetail()
+        showToast('Topic deleted completely')
+      } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to delete topic') }
+      return
+    }
+    updateState(current => ({ ...current, topics: current.topics.filter(t => t.id !== topicId) }))
+    closeDetail()
+    showToast('Topic deleted')
+  }
+
+  const deleteVideo = async (videoId: string) => {
+    if (API_MODE) {
+      try {
+        await apiRequest(`/api/videos/${videoId}`, { method: 'DELETE' })
+        await refreshFromApi()
+        closeDetail()
+        showToast('Video deleted')
+      } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to delete video') }
+      return
+    }
+    updateState(current => ({ ...current, videos: current.videos.filter(v => v.id !== videoId) }))
+    closeDetail()
+    showToast('Video deleted')
+  }
+
+  const deleteUpload = async (uploadId: string) => {
+    if (API_MODE) {
+      try {
+        await apiRequest(`/api/uploads/${uploadId}`, { method: 'DELETE' })
+        await refreshFromApi()
+        closeDetail()
+        showToast('Upload record deleted')
+      } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to delete upload') }
+      return
+    }
+    updateState(current => ({ ...current, uploads: current.uploads.filter(u => u.id !== uploadId) }))
+    closeDetail()
+    showToast('Upload record deleted')
+  }
+
+  const discoverTopics = async (niche = 'Science') => {
+    if (API_MODE) {
+      try {
+        const result = await apiRequest<{ provider: string }>('/api/topics/discover', { method: 'POST', body: JSON.stringify({ niche }) })
+        await refreshFromApi()
+        showToast(`Discovered new trending topics with ${result.provider}`)
+      } catch (error) { showToast(error instanceof Error ? error.message : 'Topic discovery failed') }
+      return
+    }
+    const topic: Topic = { id: `topic-discovered-${Date.now()}`, title: `The 2026 breakdown of ${niche}`, niche, source: 'trending', status: 'new', metrics: { trendScore: 88, searchLift: 24, competition: 'Low' }, rationale: 'Discovered from current trend metrics.', createdAt: new Date().toISOString() }
+    updateState(current => ({ ...current, topics: [topic, ...current.topics] }))
+    showToast('Discovered new trending topic')
   }
 
   const publishedUploads = state.uploads.filter(upload => upload.status === 'published' && new Date(upload.createdAt).getTime() > Date.now() - 30 * 86400000)
@@ -418,9 +486,9 @@ function App() {
 
   const renderPage = () => {
     if (view === 'dashboard') return <DashboardPage state={state} nextUpload={nextUpload} lastPublished={lastPublished} publishedCount={publishedUploads.length} totalViews={totalViews} avgDuration={avgDuration} subs={subs} failedVideos={failedVideos} failedUploads={failedUploads} scriptsById={scriptsById} onRun={runManualShort} onNavigate={navigate} onOpen={openDetail} automationPaused={state.automationPaused} onToggleAutomation={toggleAutomation} />
-    if (view === 'topics') return <TopicsPage topics={state.topics} scriptsByTopic={scriptsByTopic} filter={topicFilter} niche={topicNiche} onFilter={setTopicFilter} onNiche={setTopicNiche} onOpen={openDetail} onGenerate={generateScript} onReject={rejectTopic} onAdd={createTopic} />
+    if (view === 'topics') return <TopicsPage topics={state.topics} scriptsByTopic={scriptsByTopic} filter={topicFilter} niche={topicNiche} onFilter={setTopicFilter} onNiche={setTopicNiche} onOpen={openDetail} onGenerate={generateScript} onReject={rejectTopic} onAdd={createTopic} onDiscover={() => discoverTopics(topicNiche === 'all' ? 'Science' : topicNiche)} />
     if (view === 'videos') return <VideosPage videos={state.videos} scriptsById={scriptsById} onOpen={openDetail} onRerender={rerenderVideo} />
-    if (view === 'settings') return <SettingsPage state={state} onRefresh={refreshFromApi} />
+    if (view === 'settings') return <SettingsPage state={state} onRefresh={refreshFromApi} onConnectYouTube={connectYouTube} onDisconnectYouTube={disconnectYouTube} onUpdateAutoPublish={updateAutoPublish} />
     if (view === 'audit') return <AuditPage state={state} />
     return <UploadsPage uploads={state.uploads} analyticsByUpload={analyticsByUpload} filter={uploadFilter} onFilter={setUploadFilter} onOpen={openDetail} />
   }
@@ -433,7 +501,7 @@ function App() {
       {connection === 'connecting' && <div className="connection-loading"><div className="loading-spinner" /><span>Connecting to backend...</span></div>}
       <div className="page-content">{renderPage()}</div>
     </main>
-    {selectedTarget && <DetailPanel view={selectedTarget.view} id={selectedTarget.id} state={state} scriptsByTopic={scriptsByTopic} scriptsById={scriptsById} videosById={videosById} analyticsByUpload={analyticsByUpload} onClose={closeDetail} onGenerate={generateScript} onProduceVideo={produceVideoFromScript} onReject={rejectTopic} onRerender={rerenderVideo} onResync={resyncAnalytics} onReupload={reupload} onApprove={approveForPublish} />}
+    {selectedTarget && <DetailPanel view={selectedTarget.view} id={selectedTarget.id} state={state} scriptsByTopic={scriptsByTopic} scriptsById={scriptsById} videosById={videosById} analyticsByUpload={analyticsByUpload} onClose={closeDetail} onGenerate={generateScript} onProduceVideo={produceVideoFromScript} onReject={rejectTopic} onDeleteTopic={deleteTopic} onDeleteVideo={deleteVideo} onDeleteUpload={deleteUpload} onRerender={rerenderVideo} onResync={resyncAnalytics} onReupload={reupload} onApprove={approveForPublish} />}
     {toast && <div className="toast"><div className="toast-icon"><Icon name="check" size={15} /></div><span>{toast}</span><button onClick={() => setToast(null)} aria-label="Dismiss"><Icon name="x" size={15} /></button></div>}
   </div>
 }
@@ -497,10 +565,10 @@ function DashboardPage({ state, nextUpload, lastPublished, publishedCount, total
 }
 function ProductionRow({ label, value, total, percent, color }: { label: string; value: string; total: string; percent: number; color: string }) { return <div className="production-row"><div className="production-copy"><span>{label}</span><small><b>{value}</b> {total}</small></div><div className="progress-track"><span className={`progress-${color}`} style={{ width: `${percent}%` }} /></div><span className="progress-value">{percent}%</span></div> }
 
-function TopicsPage({ topics, scriptsByTopic, filter, niche, onFilter, onNiche, onOpen, onGenerate, onReject, onAdd }: { topics: Topic[]; scriptsByTopic: Map<string, Script>; filter: string; niche: string; onFilter: (value: string) => void; onNiche: (value: string) => void; onOpen: (id: string) => void; onGenerate: (topic: Topic) => void; onReject: (id: string) => void; onAdd: () => void }) {
+function TopicsPage({ topics, scriptsByTopic, filter, niche, onFilter, onNiche, onOpen, onGenerate, onReject, onAdd, onDiscover }: { topics: Topic[]; scriptsByTopic: Map<string, Script>; filter: string; niche: string; onFilter: (value: string) => void; onNiche: (value: string) => void; onOpen: (id: string) => void; onGenerate: (topic: Topic) => void; onReject: (id: string) => void; onAdd: () => void; onDiscover: () => void }) {
   const filtered = topics.filter(topic => (filter === 'all' || topic.status === filter) && (niche === 'all' || topic.niche === niche)).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
   const niches = [...new Set(topics.map(topic => topic.niche))]
-  return <><PageIntro eyebrow="Discovery workspace" title="Topic pipeline" description="Shape the ideas that become tomorrow's Shorts." action={<ActionButton icon="plus" variant="primary" onClick={onAdd}>Add a topic</ActionButton>} /><section className="panel list-panel"><div className="list-toolbar"><div className="toolbar-title"><strong>All topics</strong><span>{filtered.length} ideas in your pipeline</span></div><div className="toolbar-filters"><label className="select-wrap"><Icon name="filter" size={15} /><select value={niche} onChange={event => onNiche(event.target.value)}><option value="all">All niches</option>{niches.map(item => <option key={item}>{item}</option>)}</select></label><label className="select-wrap"><select value={filter} onChange={event => onFilter(event.target.value)}><option value="all">All statuses</option><option value="new">New</option><option value="selected">Selected</option><option value="scripted">Scripted</option><option value="rejected">Rejected</option></select></label></div></div><div className="data-table topics-table"><div className="table-head"><span>Topic</span><span>Niche</span><span>Source</span><span>Status</span><span>Created</span><span /></div>{filtered.length === 0 ? <EmptyState title="No matching ideas" description="Try a different niche or status filter." /> : filtered.map(topic => <button className="table-row" key={topic.id} onClick={() => onOpen(topic.id)}><div className="table-title"><div className="topic-initial">{topic.title.slice(0, 1)}</div><div><strong>{topic.title}</strong><span>{scriptsByTopic.has(topic.id) ? 'Script attached' : 'No script yet'}</span></div></div><span className="muted">{topic.niche}</span><span className="source-label"><span className={`source-dot source-${topic.source}`} />{topic.source}</span><StatusBadge status={topic.status} /><span className="muted">{formatDate(topic.createdAt)}</span><Icon name="chevron" size={16} /></button>)}</div></section></>
+  return <><PageIntro eyebrow="Discovery workspace" title="Topic pipeline" description="Shape the ideas that become tomorrow's Shorts." action={<div style={{ display: 'flex', gap: '8px' }}><ActionButton icon="spark" variant="secondary" onClick={onDiscover}>Discover topics</ActionButton><ActionButton icon="plus" variant="primary" onClick={onAdd}>Add topic</ActionButton></div>} /><section className="panel list-panel"><div className="list-toolbar"><div className="toolbar-title"><strong>All topics</strong><span>{filtered.length} ideas in your pipeline</span></div><div className="toolbar-filters"><label className="select-wrap"><Icon name="filter" size={15} /><select value={niche} onChange={event => onNiche(event.target.value)}><option value="all">All niches</option>{niches.map(item => <option key={item}>{item}</option>)}</select></label><label className="select-wrap"><select value={filter} onChange={event => onFilter(event.target.value)}><option value="all">All statuses</option><option value="new">New</option><option value="selected">Selected</option><option value="scripted">Scripted</option><option value="rejected">Rejected</option></select></label></div></div><div className="data-table topics-table"><div className="table-head"><span>Topic</span><span>Niche</span><span>Source</span><span>Status</span><span>Created</span><span /></div>{filtered.length === 0 ? <EmptyState title="No matching ideas" description="Try a different niche or status filter." /> : filtered.map(topic => <button className="table-row" key={topic.id} onClick={() => onOpen(topic.id)}><div className="table-title"><div className="topic-initial">{topic.title.slice(0, 1)}</div><div><strong>{topic.title}</strong><span>{scriptsByTopic.has(topic.id) ? 'Script attached' : 'No script yet'}</span></div></div><span className="muted">{topic.niche}</span><span className="source-label"><span className={`source-dot source-${topic.source}`} />{topic.source}</span><StatusBadge status={topic.status} /><span className="muted">{formatDate(topic.createdAt)}</span><Icon name="chevron" size={16} /></button>)}</div></section></>
 }
 
 function VideosPage({ videos, scriptsById, onOpen, onRerender }: { videos: Video[]; scriptsById: Map<string, Script>; onOpen: (id: string) => void; onRerender: (id: string) => void }) {
@@ -516,19 +584,74 @@ function UploadsPage({ uploads, analyticsByUpload, filter, onFilter, onOpen }: {
 
 function PageIntro({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) { return <div className="page-intro"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div><div className="intro-actions">{action}<button className="more-button"><Icon name="more" size={19} /></button></div></div> }
 
-function DetailPanel({ view, id, state, scriptsByTopic, scriptsById, videosById, analyticsByUpload, onClose, onGenerate, onProduceVideo, onReject, onRerender, onResync, onReupload, onApprove }: { view: View; id: string; state: AppState; scriptsByTopic: Map<string, Script>; scriptsById: Map<string, Script>; videosById: Map<string, Video>; analyticsByUpload: Map<string, Analytics>; onClose: () => void; onGenerate: (topic: Topic) => void; onProduceVideo: (scriptId: string) => void; onReject: (id: string) => void; onRerender: (id: string) => void; onResync: (id: string) => void; onReupload: (id: string) => void; onApprove: (id: string) => void }) {
+function DetailPanel({
+  view,
+  id,
+  state,
+  scriptsByTopic,
+  scriptsById,
+  videosById,
+  analyticsByUpload,
+  onClose,
+  onGenerate,
+  onProduceVideo,
+  onReject,
+  onDeleteTopic,
+  onDeleteVideo,
+  onDeleteUpload,
+  onRerender,
+  onResync,
+  onReupload,
+  onApprove,
+}: {
+  view: View
+  id: string
+  state: AppState
+  scriptsByTopic: Map<string, Script>
+  scriptsById: Map<string, Script>
+  videosById: Map<string, Video>
+  analyticsByUpload: Map<string, Analytics>
+  onClose: () => void
+  onGenerate: (topic: Topic) => void
+  onProduceVideo: (scriptId: string) => void
+  onReject: (id: string) => void
+  onDeleteTopic: (id: string) => void
+  onDeleteVideo: (id: string) => void
+  onDeleteUpload: (id: string) => void
+  onRerender: (id: string) => void
+  onResync: (id: string) => void
+  onReupload: (id: string) => void
+  onApprove: (id: string) => void
+}) {
   const topic = view === 'topics' ? state.topics.find(item => item.id === id) : undefined
   const video = view === 'videos' ? state.videos.find(item => item.id === id) : undefined
   const upload = view === 'uploads' ? state.uploads.find(item => item.id === id) : undefined
   const script = topic ? scriptsByTopic.get(topic.id) : video ? scriptsById.get(video.scriptId) : upload ? scriptsById.get(videosById.get(upload.videoId)?.scriptId || '') : undefined
   const heading = topic ? 'Topic details' : video ? 'Video details' : 'Upload details'
-  return <div className="detail-backdrop" onClick={onClose}><aside className="detail-panel" onClick={event => event.stopPropagation()}><div className="detail-header"><div><span className="eyebrow">{heading}</span><h2>{topic?.title || script?.titleSuggestion || upload?.title || 'Record details'}</h2></div><button className="close-button" onClick={onClose}><Icon name="x" size={19} /></button></div>{topic && <TopicDetail topic={topic} script={script} onGenerate={onGenerate} onProduceVideo={onProduceVideo} onReject={onReject} />}{video && <VideoDetail video={video} script={script} onRerender={onRerender} />}{upload && <UploadDetail upload={upload} analytics={analyticsByUpload.get(upload.id)} onResync={onResync} onReupload={onReupload} onApprove={onApprove} />}</aside></div>
+  return (
+    <div className="detail-backdrop" onClick={onClose}>
+      <aside className="detail-panel" onClick={event => event.stopPropagation()}>
+        <div className="detail-header">
+          <div>
+            <span className="eyebrow">{heading}</span>
+            <h2>{topic?.title || script?.titleSuggestion || upload?.title || 'Record details'}</h2>
+          </div>
+          <button className="close-button" onClick={onClose}>
+            <Icon name="x" size={19} />
+          </button>
+        </div>
+        {topic && <TopicDetail topic={topic} script={script} onGenerate={onGenerate} onProduceVideo={onProduceVideo} onReject={onReject} onDelete={onDeleteTopic} />}
+        {video && <VideoDetail video={video} script={script} onRerender={onRerender} onDelete={onDeleteVideo} />}
+        {upload && <UploadDetail upload={upload} analytics={analyticsByUpload.get(upload.id)} onResync={onResync} onReupload={onReupload} onApprove={onApprove} onDelete={onDeleteUpload} />}
+      </aside>
+    </div>
+  )
 }
 function DetailActions({ children }: { children: React.ReactNode }) { return <div className="detail-actions">{children}</div> }
 function DetailMeta({ label, value }: { label: string; value: React.ReactNode }) { return <div className="detail-meta"><span>{label}</span><strong>{value}</strong></div> }
-function TopicDetail({ topic, script, onGenerate, onProduceVideo, onReject }: { topic: Topic; script?: Script; onGenerate: (topic: Topic) => void; onProduceVideo: (scriptId: string) => void; onReject: (id: string) => void }) { return <div className="detail-body"><div className="detail-status-row"><StatusBadge status={topic.status} /><span className="muted">Added {formatDate(topic.createdAt)}</span></div><div className="detail-meta-grid"><DetailMeta label="Niche" value={topic.niche} /><DetailMeta label="Source" value={<span className="source-label"><span className={`source-dot source-${topic.source}`} />{topic.source}</span>} /><DetailMeta label="Trend score" value={`${topic.metrics.trendScore}/100`} /><DetailMeta label="Competition" value={topic.metrics.competition} /></div><div className="detail-section"><span className="detail-label">Why this topic</span><p className="detail-copy">{topic.rationale || 'No rationale has been recorded for this topic.'}</p></div><div className="metrics-json"><div className="json-head"><span>Performance signals</span><Icon name="copy" size={14} /></div><pre>{JSON.stringify(topic.metrics, null, 2)}</pre></div><div className="detail-section"><div className="linked-heading"><span className="detail-label">Linked script</span>{script && <StatusBadge status={script.status} />}</div>{script ? <div className="script-preview"><strong>{script.hook}</strong><p>{script.text}</p><div className="script-footer"><span><Icon name="clock" size={14} /> {script.durationSec}s</span><span>{script.tagsSuggestion.slice(0, 2).map(tag => `#${tag}`).join(' ')}</span></div></div> : <EmptyState title="No script attached" description="Generate a script to move this topic into production." />}</div><DetailActions>{script ? <><ActionButton icon="film" variant="primary" onClick={() => onProduceVideo(script.id)}>Produce video Short</ActionButton><ActionButton icon="spark" variant="secondary" onClick={() => onGenerate(topic)}>Regenerate script</ActionButton></> : <ActionButton icon="spark" variant="primary" onClick={() => onGenerate(topic)}>Generate script</ActionButton>}{topic.status !== 'rejected' && <ActionButton icon="x" variant="ghost" onClick={() => onReject(topic.id)}>Reject topic</ActionButton>}</DetailActions></div> }
-function VideoDetail({ video, script, onRerender }: { video: Video; script?: Script; onRerender: (id: string) => void }) { return <div className="detail-body"><div className="detail-status-row"><StatusBadge status={video.status} /><span className="muted">Created {formatDate(video.createdAt, true)}</span></div><div className="detail-section"><span className="detail-label">Source script</span><div className="script-quote"><span>“</span>{script?.text || 'The linked script is not available.'}</div></div>{video.audioUrl && <div className="media-block"><span className="detail-label"><Icon name="audio" size={14} /> Voiceover</span><audio controls src={video.audioUrl} /></div>}<div className="media-block"><span className="detail-label"><Icon name="image" size={14} /> Visual assets · {video.visualAssets.length}</span>{video.visualAssets.length ? <div className="asset-grid">{video.visualAssets.map((asset, index) => { const source = typeof asset === 'string' ? asset : asset.path; return <img key={`${source}-${index}`} src={source} alt={typeof asset === 'string' ? 'Visual asset' : asset.role || 'Visual asset'} /> })}</div> : <div className="media-empty">No visual assets attached yet.</div>}</div>{video.renderManifest && <div className="detail-section"><span className="detail-label">Review checks</span><p className="detail-copy">{video.renderManifest.compliance?.join(' · ') || 'Asset and caption checks pending.'}</p>{video.renderManifest.factualSources?.map(source => <a className="youtube-detail-link" key={source} href={source} target="_blank" rel="noreferrer">Science source <Icon name="external" size={14} /></a>)}</div>}{video.finalVideoUrl && <div className="media-block"><span className="detail-label"><Icon name="video" size={14} /> Final video</span><video className="video-preview" controls poster={video.thumbnailUrl} src={video.finalVideoUrl} /></div>}<DetailActions><ActionButton icon="redo" variant="primary" onClick={() => onRerender(video.id)}>{video.status === 'failed' ? 'Retry render' : 'Re-render video'}</ActionButton></DetailActions></div> }
-function UploadDetail({ upload, analytics, onResync, onReupload, onApprove }: { upload: Upload; analytics?: Analytics; onResync: (id: string) => void; onReupload: (id: string) => void; onApprove: (id: string) => void }) { return <div className="detail-body"><div className="detail-status-row"><StatusBadge status={upload.status} /><span className="muted">Created {formatDate(upload.createdAt, true)}</span></div>{upload.thumbnailUrl && <img className="detail-thumbnail" src={upload.thumbnailUrl} alt="Upload thumbnail" />}<div className="detail-meta-grid"><DetailMeta label="Scheduled at" value={formatDate(upload.scheduledAt, true)} /><DetailMeta label="YouTube ID" value={upload.youtubeVideoId || 'Not published'} /></div><div className="detail-section"><span className="detail-label">Description</span><p className="detail-copy">{upload.description || 'No description added.'}</p></div><div className="tag-list">{upload.tags.map(tag => <span key={tag}>#{tag}</span>)}</div>{upload.youtubeUrl && <a className="youtube-detail-link" href={upload.youtubeUrl} target="_blank" rel="noreferrer">Open on YouTube <Icon name="external" size={14} /></a>}<div className="analytics-card"><div className="analytics-card-head"><div><span className="eyebrow">Latest snapshot</span><strong>Performance overview</strong></div><span className="muted">{formatDate(analytics?.fetchedAt)}</span></div><div className="analytics-grid"><AnalyticsValue label="Views" value={analytics?.views ? formatNumber(analytics.views) : '—'} /><AnalyticsValue label="Avg. duration" value={analytics?.averageViewDurationSec ? `${analytics.averageViewDurationSec}s` : '—'} /><AnalyticsValue label="Swipe away" value={analytics?.swipeAwayRate ? `${analytics.swipeAwayRate}%` : '—'} /><AnalyticsValue label="Likes" value={analytics?.likes ? formatNumber(analytics.likes) : '—'} /><AnalyticsValue label="Comments" value={analytics?.comments ? formatNumber(analytics.comments) : '—'} /><AnalyticsValue label="Subs gained" value={analytics?.subscribersGained ? `+${formatNumber(analytics.subscribersGained)}` : '—'} /></div></div><DetailActions>{upload.status === 'review_required' && <ActionButton icon="check" variant="primary" onClick={() => onApprove(upload.id)}>Approve for 18:00 tomorrow</ActionButton>}<ActionButton icon="refresh" variant="secondary" onClick={() => onResync(upload.id)}>Resync analytics</ActionButton>{upload.status === 'failed' && <ActionButton icon="redo" variant="primary" onClick={() => onReupload(upload.id)}>Re-upload</ActionButton>}</DetailActions></div> }
+function TopicDetail({ topic, script, onGenerate, onProduceVideo, onReject, onDelete }: { topic: Topic; script?: Script; onGenerate: (topic: Topic) => void; onProduceVideo: (scriptId: string) => void; onReject: (id: string) => void; onDelete: (id: string) => void }) { return <div className="detail-body"><div className="detail-status-row"><StatusBadge status={topic.status} /><span className="muted">Added {formatDate(topic.createdAt)}</span></div><div className="detail-meta-grid"><DetailMeta label="Niche" value={topic.niche} /><DetailMeta label="Source" value={<span className="source-label"><span className={`source-dot source-${topic.source}`} />{topic.source}</span>} /><DetailMeta label="Trend score" value={`${topic.metrics.trendScore}/100`} /><DetailMeta label="Competition" value={topic.metrics.competition} /></div><div className="detail-section"><span className="detail-label">Why this topic</span><p className="detail-copy">{topic.rationale || 'No rationale has been recorded for this topic.'}</p></div><div className="metrics-json"><div className="json-head"><span>Performance signals</span><Icon name="copy" size={14} /></div><pre>{JSON.stringify(topic.metrics, null, 2)}</pre></div><div className="detail-section"><div className="linked-heading"><span className="detail-label">Linked script</span>{script && <StatusBadge status={script.status} />}</div>{script ? <div className="script-preview"><strong>{script.hook}</strong><p>{script.text}</p><div className="script-footer"><span><Icon name="clock" size={14} /> {script.durationSec}s</span><span>{script.tagsSuggestion.slice(0, 2).map(tag => `#${tag}`).join(' ')}</span></div></div> : <EmptyState title="No script attached" description="Generate a script to move this topic into production." />}</div><DetailActions>{script ? <><ActionButton icon="film" variant="primary" onClick={() => onProduceVideo(script.id)}>Produce video Short</ActionButton><ActionButton icon="spark" variant="secondary" onClick={() => onGenerate(topic)}>Regenerate script</ActionButton></> : <ActionButton icon="spark" variant="primary" onClick={() => onGenerate(topic)}>Generate script</ActionButton>}{topic.status !== 'rejected' && <ActionButton icon="x" variant="ghost" onClick={() => onReject(topic.id)}>Reject topic</ActionButton>}<ActionButton icon="trash" variant="danger" onClick={() => onDelete(topic.id)}>Delete topic</ActionButton></DetailActions></div> }
+function VideoDetail({ video, script, onRerender, onDelete }: { video: Video; script?: Script; onRerender: (id: string) => void; onDelete: (id: string) => void }) { return <div className="detail-body"><div className="detail-status-row"><StatusBadge status={video.status} /><span className="muted">Created {formatDate(video.createdAt, true)}</span></div><div className="detail-section"><span className="detail-label">Source script</span><div className="script-quote"><span>“</span>{script?.text || 'The linked script is not available.'}</div></div>{video.audioUrl && <div className="media-block"><span className="detail-label"><Icon name="audio" size={14} /> Voiceover</span><audio controls src={video.audioUrl} /></div>}<div className="media-block"><span className="detail-label"><Icon name="image" size={14} /> Visual assets · {video.visualAssets.length}</span>{video.visualAssets.length ? <div className="asset-grid">{video.visualAssets.map((asset, index) => { const source = typeof asset === 'string' ? asset : asset.path; return <img key={`${source}-${index}`} src={source} alt={typeof asset === 'string' ? 'Visual asset' : asset.role || 'Visual asset'} /> })}</div> : <div className="media-empty">No visual assets attached yet.</div>}</div>{video.renderManifest && <div className="detail-section"><span className="detail-label">Review checks</span><p className="detail-copy">{video.renderManifest.compliance?.join(' · ') || 'Asset and caption checks pending.'}</p>{video.renderManifest.factualSources?.map(source => <a className="youtube-detail-link" key={source} href={source} target="_blank" rel="noreferrer">Science source <Icon name="external" size={14} /></a>)}</div>}{video.finalVideoUrl && <div className="media-block"><span className="detail-label"><Icon name="video" size={14} /> Final video</span><video className="video-preview" controls poster={video.thumbnailUrl} src={video.finalVideoUrl} /></div>}<DetailActions><ActionButton icon="redo" variant="primary" onClick={() => onRerender(video.id)}>{video.status === 'failed' ? 'Retry render' : 'Re-render video'}</ActionButton><ActionButton icon="trash" variant="danger" onClick={() => onDelete(video.id)}>Delete video</ActionButton></DetailActions></div> }
+function UploadDetail({ upload, analytics, onResync, onReupload, onApprove, onDelete }: { upload: Upload; analytics?: Analytics; onResync: (id: string) => void; onReupload: (id: string) => void; onApprove: (id: string) => void; onDelete: (id: string) => void }) { return <div className="detail-body"><div className="detail-status-row"><StatusBadge status={upload.status} /><span className="muted">Created {formatDate(upload.createdAt, true)}</span></div>{upload.thumbnailUrl && <img className="detail-thumbnail" src={upload.thumbnailUrl} alt="Upload thumbnail" />}<div className="detail-meta-grid"><DetailMeta label="Scheduled at" value={formatDate(upload.scheduledAt, true)} /><DetailMeta label="YouTube ID" value={upload.youtubeVideoId || 'Not published'} /></div><div className="detail-section"><span className="detail-label">Description</span><p className="detail-copy">{upload.description || 'No description added.'}</p></div><div className="tag-list">{upload.tags.map(tag => <span key={tag}>#{tag}</span>)}</div>{upload.youtubeUrl && <a className="youtube-detail-link" href={upload.youtubeUrl} target="_blank" rel="noreferrer">Open on YouTube <Icon name="external" size={14} /></a>}<div className="analytics-card"><div className="analytics-card-head"><div><span className="eyebrow">Latest snapshot</span><strong>Performance overview</strong></div><span className="muted">{formatDate(analytics?.fetchedAt)}</span></div><div className="analytics-grid"><AnalyticsValue label="Views" value={analytics?.views ? formatNumber(analytics.views) : '—'} /><AnalyticsValue label="Avg. duration" value={analytics?.averageViewDurationSec ? `${analytics.averageViewDurationSec}s` : '—'} /><AnalyticsValue label="Swipe away" value={analytics?.swipeAwayRate ? `${analytics.swipeAwayRate}%` : '—'} /><AnalyticsValue label="Likes" value={analytics?.likes ? formatNumber(analytics.likes) : '—'} /><AnalyticsValue label="Comments" value={analytics?.comments ? formatNumber(analytics.comments) : '—'} /><AnalyticsValue label="Subs gained" value={analytics?.subscribersGained ? `+${formatNumber(analytics.subscribersGained)}` : '—'} /></div></div><DetailActions>{upload.status === 'review_required' && <ActionButton icon="check" variant="primary" onClick={() => onApprove(upload.id)}>Approve for 18:00 tomorrow</ActionButton>}<ActionButton icon="refresh" variant="secondary" onClick={() => onResync(upload.id)}>Resync analytics</ActionButton>{upload.status === 'failed' && <ActionButton icon="redo" variant="primary" onClick={() => onReupload(upload.id)}>Re-upload</ActionButton>}<ActionButton icon="trash" variant="danger" onClick={() => onDelete(upload.id)}>Delete upload</ActionButton></DetailActions></div> }
 function AnalyticsValue({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div> }
 
 type LlmProviderCard = {
@@ -550,7 +673,7 @@ const LLM_PROVIDER_CARDS: LlmProviderCard[] = [
   { id: 'openai', name: 'OpenAI GPT-4o-mini', badge: 'PAID', model: 'gpt-4o-mini', description: '~$0.01/script. Structured JSON output, strong quality. Uses your OPENAI_API_KEY.', signupUrl: 'https://platform.openai.com', envVar: 'OPENAI_API_KEY' },
 ]
 
-function SettingsPage({ state, onRefresh }: { state: AppState; onRefresh: () => Promise<void> }) {
+function SettingsPage({ state, onRefresh, onConnectYouTube, onDisconnectYouTube, onUpdateAutoPublish }: { state: AppState; onRefresh: () => Promise<void>; onConnectYouTube: () => void; onDisconnectYouTube: () => void; onUpdateAutoPublish: (autoApprove: boolean, autoPublish: boolean) => void }) {
   const readiness: ProviderReadiness = state.readiness ?? { llm: true, youtube: false, youtubeSearch: false, dograh: false, visuals: false, renderer: true }
   const usage: UsageSummary = state.usage ?? { month: new Date().toISOString().slice(0, 7), spentUsd: 0, budgetUsd: 5, remainingUsd: 5 }
   const activeLlmProvider = readiness.llmProvider || 'local'
@@ -603,7 +726,32 @@ function SettingsPage({ state, onRefresh }: { state: AppState; onRefresh: () => 
         </div>
         <p className="provider-desc">{provider.description}</p>
         <div className="provider-meta"><span>{readiness[provider.key] ? 'Ready' : 'Awaiting credential'}</span><code style={{ fontSize: '9px', color: '#8a8b98' }}>{provider.needed}</code></div>
+        {provider.key === 'youtube' && API_MODE && (
+          readiness.youtube
+            ? <div style={{ marginTop: 10 }}><ActionButton icon="external" variant="secondary" onClick={onDisconnectYouTube}>Disconnect YouTube</ActionButton></div>
+            : <div style={{ marginTop: 10 }}><ActionButton icon="external" variant="primary" onClick={onConnectYouTube}>Connect YouTube</ActionButton></div>
+        )}
       </article>)}
+    </section>
+
+    <section className="panel settings-section">
+      <SectionHeading eyebrow="Automation" title="Auto-publish pipeline" />
+      <div className="settings-toggles">
+        <label className="toggle-row">
+          <div>
+            <strong>Auto-approve</strong>
+            <span className="muted">Automatically approve videos after render if review threshold is passed</span>
+          </div>
+          <input type="checkbox" checked={state.autoApprove} onChange={event => onUpdateAutoPublish(event.target.checked, state.autoPublish)} />
+        </label>
+        <label className="toggle-row">
+          <div>
+            <strong>Auto-publish</strong>
+            <span className="muted">Automatically publish approved uploads to YouTube</span>
+          </div>
+          <input type="checkbox" checked={state.autoPublish} onChange={event => onUpdateAutoPublish(state.autoApprove, event.target.checked)} />
+        </label>
+      </div>
     </section>
 
     <section className="panel budget-panel">
