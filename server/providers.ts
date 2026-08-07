@@ -177,6 +177,31 @@ Evaluate this script now. Set judgeVerdict to "approved" if judgeScore >= 9.0, o
   }
 }
 
+// ---------------------------------------------------------------------------
+// Ollama — local LLM via Ollama's native /api/chat endpoint (OpenAI-style messages)
+// ---------------------------------------------------------------------------
+async function ollamaChat(
+  baseUrl: string,
+  model: string,
+  messages: Array<{ role: 'system' | 'user'; content: string }>,
+  temperature: number,
+  maxTokens: number,
+): Promise<string> {
+  const data = await requestJson(`${baseUrl.replace(/\/$/, '')}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages,
+      stream: false,
+      options: { temperature, num_predict: maxTokens },
+    }),
+  })
+  const content = (data.message as Record<string, unknown> | undefined)?.content as string | undefined
+  if (!content) throw new Error('Ollama returned empty content')
+  return content
+}
+
 export function localJudge(topic: Topic, draft: ScriptDraft | Script): Omit<JudgeResult, 'provider'> {
   const wordCount = draft.text.split(/\s+/).length
   const hasHook = draft.hook.length > 10
@@ -250,6 +275,63 @@ export async function judgeScript(
   if (config.llmProvider === 'nvidia' && config.nvidiaApiKey) {
     const res = await openAiCompatibleJudge(topic, draft, 'https://integrate.api.nvidia.com/v1', config.nvidiaApiKey, config.nvidiaModel)
     return { ...res, provider: `nvidia:${config.nvidiaModel}` }
+  }
+  if (config.llmProvider === 'ollama') {
+    const systemPrompt = `You are a world-class YouTube Shorts Algorithm Judge and Content Director.
+Your task is to judge the viral potential, retention power, and hook strength of YouTube Shorts scripts on a strict 0 to 10 scale.
+A score of 9.0 or higher is required for approval. Be extremely critical, honest, and high-standard.
+
+Evaluate on 4 criteria (0.0 to 2.5 points each):
+1. hookScore (0-2.5): Does sentence 1 instantly stop the scroll?
+2. retentionScore (0-2.5): Is there zero filler, continuous curiosity gaps, and tight structure?
+3. viralityScore (0-2.5): Is the concept/fact mind-blowing and highly shareable?
+4. pacingScore (0-2.5): Does timing (15-45s), call to action, and rhythm suit vertical video?
+
+Return ONLY valid JSON matching this schema:
+{
+  "judgeScore": 9.2,
+  "judgeVerdict": "approved",
+  "judgeFeedback": "Crisp 1-2 sentence evaluation explaining why it scored high or low.",
+  "criteria": {
+    "hookScore": 2.4,
+    "retentionScore": 2.3,
+    "viralityScore": 2.3,
+    "pacingScore": 2.2
+  }
+}`
+
+    const userPrompt = `Topic: "${topic.title}"
+Niche: ${topic.niche}
+Hook: "${draft.hook}"
+Script: "${draft.text}"
+Duration: ${draft.durationSec}s
+CTA: "${draft.cta || ''}"
+
+Evaluate this script now. Set judgeVerdict to "approved" if judgeScore >= 9.0, otherwise "rejected". Return JSON only.`
+
+    const content = await ollamaChat(config.ollamaBaseUrl, config.ollamaModel, [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ], 0.2, 384)
+
+    const parsed = JSON.parse(content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim())
+
+    const hookScore = Number(parsed.criteria?.hookScore ?? 2.2)
+    const retentionScore = Number(parsed.criteria?.retentionScore ?? 2.2)
+    const viralityScore = Number(parsed.criteria?.viralityScore ?? 2.2)
+    const pacingScore = Number(parsed.criteria?.pacingScore ?? 2.2)
+
+    let score = Number(parsed.judgeScore ?? (hookScore + retentionScore + viralityScore + pacingScore))
+    score = Math.min(10, Math.max(0, Math.round(score * 10) / 10))
+    const verdict = score >= 9.0 ? 'approved' : 'rejected'
+
+    return {
+      judgeScore: score,
+      judgeVerdict: verdict,
+      judgeFeedback: String(parsed.judgeFeedback || (verdict === 'approved' ? 'Passed quality threshold for Short production.' : 'Failed hook or retention threshold.')),
+      criteria: { hookScore, retentionScore, viralityScore, pacingScore },
+      provider: `ollama:${config.ollamaModel}`,
+    }
   }
   return { ...localJudge(topic, draft), provider: 'local-judge' }
 }
@@ -343,6 +425,33 @@ export async function generateScript(
     return { draft, provider: `nvidia:${config.nvidiaModel}`, estimatedCostUsd: 0 }
   }
 
+  // Ollama — local LLM via Ollama's native /api/chat endpoint
+  if (config.llmProvider === 'ollama') {
+    const userContent = feedbackPrompt
+      ? `Create a 15–45 second YouTube Short script about "${topic.title}". Niche: ${topic.niche}. ATTENTION: PREVIOUS DRAFT WAS REJECTED BY AI JUDGE (${feedbackPrompt}). You MUST write a much stronger 3-second hook, remove all filler, and build intense curiosity. Return JSON only.`
+      : `Create a 15–45 second YouTube Short script about this topic: "${topic.title}". Niche: ${topic.niche}. The script must have a strong hook (first sentence grabs attention), a surprising fact, and a question CTA at the end. Return JSON only.`
+    const content = await ollamaChat(
+      config.ollamaBaseUrl,
+      config.ollamaModel,
+      [
+        {
+          role: 'system',
+          content:
+            'You write original, factual YouTube Shorts scripts. Return ONLY valid JSON with these keys: text, durationSec, hook, cta, titleSuggestion, descriptionSuggestion, tagsSuggestion.',
+        },
+        { role: 'user', content: userContent },
+      ],
+      0.75,
+      512,
+    )
+    const cleaned = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+    return {
+      draft: { ...localScript(topic), ...JSON.parse(cleaned), status: 'draft' },
+      provider: `ollama:${config.ollamaModel}`,
+      estimatedCostUsd: 0,
+    }
+  }
+
   // Local deterministic fallback — always $0
   return { draft: localScript(topic), provider: 'local-fallback', estimatedCostUsd: 0 }
 }
@@ -395,18 +504,49 @@ export async function discoverTopics(
 // ---------------------------------------------------------------------------
 // Visual search
 // ---------------------------------------------------------------------------
+// Stopwords that add no visual signal to a Pexels image/video search query
+const PEXELS_STOPWORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'of', 'to', 'in', 'on', 'at', 'for', 'with',
+  'from', 'by', 'as', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'this',
+  'that', 'these', 'those', 'it', 'its', 'there', 'here', 'about', 'what', 'which',
+  'who', 'whom', 'when', 'where', 'why', 'how', 'not', 'no', 'so', 'if', 'then',
+  'than', 'too', 'very', 'just', 'can', 'will', 'would', 'could', 'should', 'may',
+  'might', 'must', 'do', 'does', 'did', 'have', 'has', 'had', 'i', 'you', 'we',
+  'they', 'he', 'she', 'me', 'my', 'your', 'our', 'their', 'him', 'her', 'them',
+  'most', 'more', 'much', 'many', 'some', 'any', 'all', 'every', 'each', 'one',
+  'dont', 'doesnt', 'didnt', 'wouldnt', 'couldnt', 'shouldnt', 'theres', 'youre',
+  'people', 'person', 'thing', 'things', 'way', 'part', 'into', 'over', 'under',
+  'up', 'down', 'out', 'off', 'again', 'after', 'before', 'between', 'through',
+  'only', 'own', 'same', 'other', 'such',
+])
+
+// Turn a script/title phrase into a compact keyword query for Pexels
+function derivePexelsKeywords(text: string): string {
+  const tokens = text.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/).filter(Boolean)
+  const seen = new Set<string>()
+  const keywords: string[] = []
+  for (const token of tokens) {
+    const word = token.replace(/^-+|-+$/g, '')
+    if (!word || word.length < 3 || PEXELS_STOPWORDS.has(word) || seen.has(word)) continue
+    seen.add(word)
+    keywords.push(word)
+  }
+  return keywords.length ? keywords.slice(0, 5).join(' ') : text.trim()
+}
+
 export async function searchVisuals(
   query: string,
   config: ServerConfig,
 ): Promise<{ assets: VisualAsset[]; provider: string }> {
   if (!config.pexelsApiKey) return { assets: [], provider: 'local-fallback' }
+  const searchQuery = derivePexelsKeywords(query)
   const [photoData, videoResponse] = await Promise.all([
     requestJson(
-    `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=6`,
-    { headers: { Authorization: config.pexelsApiKey } },
+      `https://api.pexels.com/v1/search?query=${encodeURIComponent(searchQuery)}&per_page=6&orientation=portrait&size=large`,
+      { headers: { Authorization: config.pexelsApiKey } },
     ),
     requestJson(
-      `https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&per_page=6`,
+      `https://api.pexels.com/videos/search?query=${encodeURIComponent(searchQuery)}&per_page=6&orientation=portrait`,
       { headers: { Authorization: config.pexelsApiKey } },
     ).catch(() => ({})),
   ])
@@ -581,10 +721,46 @@ async function stageVisualAsset(asset: VisualAsset, mediaDir: string, videoId: s
   const target = join(mediaDir, `${videoId}-source-${index}${extension}`)
   if (!asset.path || asset.type === 'illustration') { await writeLocalFallbackImage(target, asset.role || fallbackText, index); return target }
   if (/^https?:\/\//.test(asset.path)) {
-    try { const response = await fetch(asset.path); if (!response.ok) throw new Error(`status ${response.status}`); await writeFile(target, Buffer.from(await response.arrayBuffer())); return target } catch { await writeLocalFallbackImage(target, fallbackText, index); return target }
+    try {
+      const response = await fetch(asset.path)
+      if (!response.ok) throw new Error(`status ${response.status}`)
+      const contentType = response.headers.get('content-type') || ''
+      if (contentType.includes('text/html') || contentType.includes('application/json')) {
+        throw new Error(`Invalid media content-type: ${contentType}`)
+      }
+      const buffer = Buffer.from(await response.arrayBuffer())
+      if (asset.type === 'video') {
+        if (!isValidMp4Buffer(buffer)) throw new Error('Downloaded asset failed MP4 header validation')
+      } else {
+        if (!isValidImageBuffer(buffer)) throw new Error('Downloaded asset failed image header validation')
+      }
+      await writeFile(target, buffer)
+      return target
+    } catch (_err) {
+      await writeLocalFallbackImage(target, fallbackText, index)
+      return target
+    }
   }
   if (!existsSync(asset.path)) { await writeLocalFallbackImage(target, fallbackText, index); return target }
   return asset.path
+}
+
+function isValidMp4Buffer(buffer: Buffer): boolean {
+  if (buffer.length < 12) return false
+  const headerStr = buffer.toString('binary', 0, Math.min(buffer.length, 64))
+  if (headerStr.includes('ftyp')) return true
+  if (buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3) return true
+  if (buffer[0] === 0x00 && buffer[1] === 0x00 && buffer[2] === 0x00) return true
+  return false
+}
+
+function isValidImageBuffer(buffer: Buffer): boolean {
+  if (buffer.length < 8) return false
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return true
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return true
+  if (buffer.toString('binary', 0, 4) === 'RIFF' && buffer.toString('binary', 8, 12) === 'WEBP') return true
+  if (buffer.toString('binary', 0, 4).startsWith('GIF8')) return true
+  return false
 }
 
 async function writeLocalFallbackImage(targetPath: string, text: string, sceneIndex = 0) {

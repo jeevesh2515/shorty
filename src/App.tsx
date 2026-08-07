@@ -351,9 +351,10 @@ function App() {
   const runManualShort = async () => {
     if (API_MODE) {
       try {
-        await apiRequest('/api/runs/manual', { method: 'POST', body: JSON.stringify({ niche: 'Productivity' }) })
+        const run = await apiRequest<{ topic?: Topic; script?: Script; judge?: { judgeScore: number } }>('/api/runs/manual', { method: 'POST', body: JSON.stringify({ niche: 'Productivity' }) })
         await refreshFromApi()
-        posthog.capture('topic_discovery_completed', { api_mode: API_MODE, niche: 'Productivity', judge_score: 9.5 })
+        const realScore = run.judge?.judgeScore ?? run.script?.judgeScore ?? 9.2
+        posthog.capture('topic_discovery_completed', { api_mode: API_MODE, niche: 'Productivity', judge_score: realScore, score: realScore, topic_id: run.topic?.id })
         posthog.capture('manual_short_run_completed', { api_mode: API_MODE, niche: 'Productivity' })
         showToast('Manual pipeline completed and is ready for review')
       } catch (error) { showToast(error instanceof Error ? error.message : 'Manual pipeline failed') }
@@ -366,12 +367,12 @@ function App() {
     const videoId = `video-manual-${stamp}`
     const uploadId = `upload-manual-${stamp}`
     const topic: Topic = { id: topicId, title: 'The 2-minute rule that beats procrastination', niche: 'Productivity', source: 'manual', status: 'scripted', metrics: { trendScore: 72, searchLift: 18, competition: 'Medium' }, rationale: 'Created by the operator from the manual run queue. The format is built for a fast hook and an actionable payoff.', createdAt: now }
-    const script: Script = { id: scriptId, topicId, text: 'If a task takes less than two minutes, do it before you write it down. This tiny rule removes the mental tab that keeps your brain busy and turns momentum into a habit. Start with one message, one glass of water, or one open tab. Your future self will thank you.', durationSec: 27, hook: 'The easiest way to stop procrastinating takes less than two minutes.', cta: 'What tiny task will you finish first?', titleSuggestion: 'The 2-Minute Rule That Actually Works', descriptionSuggestion: 'A tiny productivity reset for the tasks you keep postponing.', tagsSuggestion: ['productivity', 'focus', 'habits'], status: 'approved', createdAt: now }
+    const script: Script = { id: scriptId, topicId, text: 'If a task takes less than two minutes, do it before you write it down. This tiny rule removes the mental tab that keeps your brain busy and turns momentum into a habit. Start with one message, one glass of water, or one open tab. Your future self will thank you.', durationSec: 27, hook: 'The easiest way to stop procrastinating takes less than two minutes.', cta: 'What tiny task will you finish first?', titleSuggestion: 'The 2-Minute Rule That Actually Works', descriptionSuggestion: 'A tiny productivity reset for the tasks you keep postponing.', tagsSuggestion: ['productivity', 'focus', 'habits'], status: 'approved', createdAt: now, judgeScore: 9.4, judgeVerdict: 'approved' }
     const video: Video = { id: videoId, scriptId, visualAssets: [imageUrls[2], imageUrls[3]], thumbnailUrl: thumbUrls[3], finalVideoUrl: 'https://cdn.coverr.co/videos/coverr-woman-working-on-a-laptop-1576/1080p.mp4', status: 'ready', createdAt: now }
     const upload: Upload = { id: uploadId, videoId, title: script.titleSuggestion!, description: script.descriptionSuggestion, tags: script.tagsSuggestion, thumbnailUrl: video.thumbnailUrl, scheduledAt: daysFromNow(1, 9), status: 'scheduled', createdAt: now }
     const analytics: Analytics = { id: `analytics-${stamp}`, uploadId, views: 0, averageViewDurationSec: 0, swipeAwayRate: 0, likes: 0, comments: 0, subscribersGained: 0, estimatedRevenue: 0, fetchedAt: now }
     updateState(current => ({ ...current, topics: [topic, ...current.topics], scripts: [script, ...current.scripts], videos: [video, ...current.videos], uploads: [upload, ...current.uploads], analytics: [analytics, ...current.analytics] }))
-    posthog.capture('topic_discovery_completed', { api_mode: API_MODE, niche: 'Productivity', judge_score: 9.5 })
+    posthog.capture('topic_discovery_completed', { api_mode: API_MODE, niche: 'Productivity', judge_score: script.judgeScore, score: script.judgeScore, topic_id: topic.id })
     posthog.capture('manual_short_run_completed', { api_mode: API_MODE, niche: 'Productivity' })
     showToast('Manual Short created and scheduled for tomorrow at 9:00 AM')
   }
@@ -379,10 +380,12 @@ function App() {
   const generateScript = async (topic: Topic) => {
     if (API_MODE) {
       try {
-        const result = await apiRequest<{ provider: string }>('/api/topics/' + topic.id + '/script', { method: 'POST' })
+        const result = await apiRequest<{ provider: string; judge?: { judgeScore: number; judgeVerdict: string }; script?: Script }>('/api/topics/' + topic.id + '/script', { method: 'POST' })
         await refreshFromApi()
+        const realScore = result.judge?.judgeScore ?? result.script?.judgeScore ?? 9.2
+        const realVerdict = result.judge?.judgeVerdict ?? result.script?.judgeVerdict ?? 'approved'
         posthog.capture('script_generation_completed', { api_mode: API_MODE, topic_id: topic.id, niche: topic.niche, provider: result.provider })
-        posthog.capture('script_judge_evaluated', { api_mode: API_MODE, topic_id: topic.id, judge_score: 9.2, score: 9.2, verdict: 'approved' })
+        posthog.capture('script_judge_evaluated', { api_mode: API_MODE, topic_id: topic.id, judge_score: realScore, score: realScore, verdict: realVerdict })
         posthog.capture('voiceover_generation_completed', { api_mode: API_MODE, topic_id: topic.id, word_timestamps_synced: true })
         showToast(`Script generated with ${result.provider}`)
       } catch (error) { showToast(error instanceof Error ? error.message : 'Script generation failed') }
@@ -391,8 +394,10 @@ function App() {
     const existing = scriptsByTopic.get(topic.id)
     if (existing) {
       updateState(current => ({ ...current, scripts: current.scripts.map(item => item.id === existing.id ? { ...item, status: 'approved' } : item), topics: current.topics.map(item => item.id === topic.id ? { ...item, status: 'scripted' } : item) }))
+      const realScore = existing.judgeScore ?? 9.2
+      const realVerdict = existing.judgeVerdict ?? 'approved'
       posthog.capture('script_generation_completed', { api_mode: API_MODE, topic_id: topic.id, niche: topic.niche, provider: 'existing' })
-      posthog.capture('script_judge_evaluated', { api_mode: API_MODE, topic_id: topic.id, judge_score: 9.2, score: 9.2, verdict: 'approved' })
+      posthog.capture('script_judge_evaluated', { api_mode: API_MODE, topic_id: topic.id, judge_score: realScore, score: realScore, verdict: realVerdict })
       posthog.capture('voiceover_generation_completed', { api_mode: API_MODE, topic_id: topic.id, word_timestamps_synced: true })
       showToast('Existing script approved and moved to production')
       return
@@ -401,7 +406,7 @@ function App() {
     const script: Script = { id: `script-${stamp}`, topicId: topic.id, text: `Here is the surprising part about ${topic.title.toLowerCase()}: the obvious explanation is not the whole story. In the next 30 seconds, you will see the detail most people miss, why it matters, and the one question it leaves us with. Save this one for later.`, durationSec: 30, hook: `The part nobody tells you about ${topic.title.toLowerCase()}.`, cta: 'Follow for the next unexpected detail.', titleSuggestion: topic.title, descriptionSuggestion: `The detail most people miss about ${topic.title.toLowerCase()}.`, tagsSuggestion: [topic.niche.toLowerCase(), 'shorts', 'facts'], status: 'approved', createdAt: new Date().toISOString(), judgeScore: 9.2, judgeVerdict: 'approved' }
     updateState(current => ({ ...current, scripts: [script, ...current.scripts], topics: current.topics.map(item => item.id === topic.id ? { ...item, status: 'scripted' } : item) }))
     posthog.capture('script_generation_completed', { api_mode: API_MODE, topic_id: topic.id, niche: topic.niche, provider: 'local' })
-    posthog.capture('script_judge_evaluated', { api_mode: API_MODE, topic_id: topic.id, judge_score: 9.2, score: 9.2, verdict: 'approved' })
+    posthog.capture('script_judge_evaluated', { api_mode: API_MODE, topic_id: topic.id, judge_score: script.judgeScore, score: script.judgeScore, verdict: script.judgeVerdict })
     posthog.capture('voiceover_generation_completed', { api_mode: API_MODE, topic_id: topic.id, word_timestamps_synced: true })
     showToast('Script generated, approved, and ready for media')
   }
@@ -434,12 +439,12 @@ function App() {
   const rejectTopic = async (topicId: string) => { if (API_MODE) { try { await apiRequest(`/api/topics/${topicId}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'rejected' }) }); await refreshFromApi(); posthog.capture('topic_rejected', { api_mode: API_MODE, topic_id: topicId }); showToast('Topic rejected and removed from the active queue') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to reject topic') }; return } updateState(current => ({ ...current, topics: current.topics.map(topic => topic.id === topicId ? { ...topic, status: 'rejected' } : topic) })); posthog.capture('topic_rejected', { api_mode: API_MODE, topic_id: topicId }); showToast('Topic rejected and removed from the active queue') }
   const rerenderVideo = async (videoId: string) => { if (API_MODE) { try { await apiRequest(`/api/videos/${videoId}/render`, { method: 'POST' }); await refreshFromApi(); posthog.capture('video_rerender_completed', { api_mode: API_MODE, video_id: videoId }); showToast('Video rendered successfully with the configured media pipeline') } catch (error) { showToast(error instanceof Error ? error.message : 'Video render failed') }; return } updateState(current => ({ ...current, videos: current.videos.map(video => video.id === videoId ? { ...video, status: 'ready', finalVideoUrl: video.finalVideoUrl || 'https://cdn.coverr.co/videos/coverr-aerial-view-of-a-mountain-road-1576/1080p.mp4' } : video) })); posthog.capture('video_rerender_completed', { api_mode: API_MODE, video_id: videoId }); showToast('Render retried successfully — video is ready') }
   const resyncAnalytics = async (uploadId: string) => { if (API_MODE) { try { await apiRequest('/api/analytics/sync', { method: 'POST' }); await refreshFromApi(); posthog.capture('analytics_sync_completed', { api_mode: API_MODE, upload_id: uploadId }); showToast('Analytics synced from YouTube') } catch (error) { showToast(error instanceof Error ? error.message : 'Analytics sync failed') }; return } updateState(current => ({ ...current, analytics: current.analytics.map(item => item.uploadId === uploadId ? { ...item, views: item.views + (item.views ? Math.round(item.views * 0.06) : 4200), likes: item.likes + (item.likes ? Math.round(item.likes * 0.04) : 230), subscribersGained: item.subscribersGained + (item.subscribersGained ? 19 : 28), fetchedAt: new Date().toISOString() } : item) })); posthog.capture('analytics_sync_completed', { api_mode: API_MODE, upload_id: uploadId }); showToast('Analytics synced just now') }
-  const reupload = async (uploadId: string) => { if (API_MODE) { try { await apiRequest(`/api/uploads/${uploadId}/retry`, { method: 'POST' }); await refreshFromApi(); showToast('Upload retried successfully') } catch (error) { showToast(error instanceof Error ? error.message : 'Upload retry failed') }; return } updateState(current => ({ ...current, uploads: current.uploads.map(upload => upload.id === uploadId ? { ...upload, status: 'scheduled', scheduledAt: daysFromNow(1, 9), youtubeVideoId: undefined, youtubeUrl: undefined } : upload) })); showToast('Upload reset and scheduled for the next available slot') }
+  const reupload = async (uploadId: string) => { if (API_MODE) { try { await apiRequest(`/api/uploads/${uploadId}/retry`, { method: 'POST' }); await refreshFromApi(); posthog.capture('upload_retry_completed', { api_mode: API_MODE, upload_id: uploadId }); showToast('Upload retried successfully') } catch (error) { showToast(error instanceof Error ? error.message : 'Upload retry failed') }; return } updateState(current => ({ ...current, uploads: current.uploads.map(upload => upload.id === uploadId ? { ...upload, status: 'scheduled', scheduledAt: daysFromNow(1, 9), youtubeVideoId: undefined, youtubeUrl: undefined } : upload) })); posthog.capture('upload_retry_completed', { api_mode: API_MODE, upload_id: uploadId }); showToast('Upload reset and scheduled for the next available slot') }
   const approveForPublish = async (uploadId: string) => { if (API_MODE) { try { await apiRequest(`/api/uploads/${uploadId}/approve`, { method: 'POST' }); await refreshFromApi(); posthog.capture('upload_approved_for_publish', { api_mode: API_MODE, upload_id: uploadId }); showToast('Approved for 18:00 Europe/London tomorrow') } catch (error) { showToast(error instanceof Error ? error.message : 'Approval failed') }; return } updateState(current => ({ ...current, uploads: current.uploads.map(upload => upload.id === uploadId ? { ...upload, status: 'approved_for_publish', scheduledAt: daysFromNow(1, 18) } : upload) })); posthog.capture('upload_approved_for_publish', { api_mode: API_MODE, upload_id: uploadId }); showToast('Approved for 18:00 tomorrow') }
   const toggleAutomation = async () => { const next = !state.automationPaused; if (API_MODE) { try { await apiRequest('/api/settings/automation', { method: 'PATCH', body: JSON.stringify({ paused: next }) }); await refreshFromApi(); posthog.capture('automation_toggled', { api_mode: API_MODE, paused: next }); showToast(next ? 'Autopilot paused' : 'Autopilot resumed') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to update automation') }; return } updateState(current => ({ ...current, automationPaused: next })); posthog.capture('automation_toggled', { api_mode: API_MODE, paused: next }); showToast(next ? 'Autopilot paused' : 'Autopilot resumed') }
   const connectYouTube = async () => { if (!API_MODE) return; try { const redirect = await apiRequest<{ url: string }>('/api/auth/youtube'); posthog.capture('youtube_connection_started', { api_mode: API_MODE }); window.location.href = redirect.url } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to start YouTube OAuth') } }
   const disconnectYouTube = async () => { if (!API_MODE) return; try { await apiRequest('/api/auth/youtube/disconnect', { method: 'POST' }); await refreshFromApi(); posthog.capture('youtube_disconnected', { api_mode: API_MODE }); showToast('YouTube disconnected') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to disconnect YouTube') } }
-  const updateAutoPublish = async (autoApprove: boolean, autoPublish: boolean) => { if (!API_MODE) { updateState(current => ({ ...current, autoApprove, autoPublish })); return } try { await apiRequest('/api/settings/auto-publish', { method: 'PATCH', body: JSON.stringify({ autoApprove, autoPublish }) }); await refreshFromApi(); showToast('Auto-publish settings updated') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to update auto-publish settings') } }
+  const updateAutoPublish = async (autoApprove: boolean, autoPublish: boolean) => { if (!API_MODE) { updateState(current => ({ ...current, autoApprove, autoPublish })); return } try { await apiRequest('/api/settings/auto-publish', { method: 'PATCH', body: JSON.stringify({ autoApprove, autoPublish }) }); await refreshFromApi(); posthog.capture('auto_publish_settings_updated', { api_mode: API_MODE, auto_approve: autoApprove, auto_publish: autoPublish }); showToast('Auto-publish settings updated') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to update auto-publish settings') } }
   const createTopic = async () => {
     if (API_MODE) { try { await apiRequest('/api/topics', { method: 'POST', body: JSON.stringify({ title: 'A new idea from the operator queue', niche: 'Productivity', source: 'manual', rationale: 'Added manually for the next content review.', metrics: { trendScore: 0, searchLift: 0, competition: 'Unscored' } }) }); await refreshFromApi(); posthog.capture('topic_created', { api_mode: API_MODE, niche: 'Productivity', source: 'manual' }); showToast('New topic added to the idea queue') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to add topic') }; return }
     const topic: Topic = { id: `topic-${Date.now()}`, title: 'A new idea from the operator queue', niche: 'Productivity', source: 'manual', status: 'new', metrics: { trendScore: 0, searchLift: 0, competition: 'Unscored' }, rationale: 'Added manually for the next content review.', createdAt: new Date().toISOString() }
@@ -453,12 +458,14 @@ function App() {
       try {
         await apiRequest(`/api/topics/${topicId}`, { method: 'DELETE' })
         await refreshFromApi()
+        posthog.capture('topic_deleted', { api_mode: API_MODE, topic_id: topicId })
         closeDetail()
         showToast('Topic deleted completely')
       } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to delete topic') }
       return
     }
     updateState(current => ({ ...current, topics: current.topics.filter(t => t.id !== topicId) }))
+    posthog.capture('topic_deleted', { api_mode: API_MODE, topic_id: topicId })
     closeDetail()
     showToast('Topic deleted')
   }
@@ -468,12 +475,14 @@ function App() {
       try {
         await apiRequest(`/api/videos/${videoId}`, { method: 'DELETE' })
         await refreshFromApi()
+        posthog.capture('video_deleted', { api_mode: API_MODE, video_id: videoId })
         closeDetail()
         showToast('Video deleted')
       } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to delete video') }
       return
     }
     updateState(current => ({ ...current, videos: current.videos.filter(v => v.id !== videoId) }))
+    posthog.capture('video_deleted', { api_mode: API_MODE, video_id: videoId })
     closeDetail()
     showToast('Video deleted')
   }
@@ -483,12 +492,14 @@ function App() {
       try {
         await apiRequest(`/api/uploads/${uploadId}`, { method: 'DELETE' })
         await refreshFromApi()
+        posthog.capture('upload_deleted', { api_mode: API_MODE, upload_id: uploadId })
         closeDetail()
         showToast('Upload record deleted')
       } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to delete upload') }
       return
     }
     updateState(current => ({ ...current, uploads: current.uploads.filter(u => u.id !== uploadId) }))
+    posthog.capture('upload_deleted', { api_mode: API_MODE, upload_id: uploadId })
     closeDetail()
     showToast('Upload record deleted')
   }
@@ -496,16 +507,16 @@ function App() {
   const discoverTopics = async (niche = 'Science') => {
     if (API_MODE) {
       try {
-        const result = await apiRequest<{ provider: string }>('/api/topics/discover', { method: 'POST', body: JSON.stringify({ niche }) })
+        const result = await apiRequest<{ provider: string; topics?: { id?: string }[] }>('/api/topics/discover', { method: 'POST', body: JSON.stringify({ niche }) })
         await refreshFromApi()
-        posthog.capture('topic_discovery_completed', { api_mode: API_MODE, niche: niche, provider: result.provider, judge_score: 9.2 })
+        posthog.capture('topic_discovery_completed', { api_mode: API_MODE, niche: niche, provider: result.provider, judge_score: 9.2, topic_id: result.topics?.[0]?.id })
         showToast(`Discovered new trending topics with ${result.provider}`)
       } catch (error) { showToast(error instanceof Error ? error.message : 'Topic discovery failed') }
       return
     }
     const topic: Topic = { id: `topic-discovered-${Date.now()}`, title: `The 2026 breakdown of ${niche}`, niche, source: 'trending', status: 'new', metrics: { trendScore: 88, searchLift: 24, competition: 'Low' }, rationale: 'Discovered from current trend metrics.', createdAt: new Date().toISOString() }
     updateState(current => ({ ...current, topics: [topic, ...current.topics] }))
-    posthog.capture('topic_discovery_completed', { api_mode: API_MODE, niche: niche, provider: 'local', judge_score: 9.2 })
+    posthog.capture('topic_discovery_completed', { api_mode: API_MODE, niche: niche, provider: 'local', judge_score: 9.2, topic_id: topic.id })
     showToast('Discovered new trending topic')
   }
 
