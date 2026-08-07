@@ -8,8 +8,9 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "noEmit": true,
+    "outDir": "./dist-server",
+    "rootDir": "./server",
     "types": ["node"]
   },
-  "include": ["server", "tests"]
+  "include": ["server"]
 }
