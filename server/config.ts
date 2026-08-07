@@ -30,6 +30,7 @@ export type ServerConfig = {
   youtubeClientId?: string
   youtubeClientSecret?: string
   youtubeRefreshToken?: string
+  youtubeOAuthRedirectUri?: string
 
   // TTS
   dograhApiUrl?: string
@@ -45,6 +46,8 @@ export type ServerConfig = {
   reviewHourLondon: number
   publishHourLondon: number
   reviewLimit: number
+  autoApprove: boolean
+  autoPublish: boolean
 }
 
 const VALID_PROVIDERS: LlmProvider[] = ['openai', 'gemini', 'groq', 'openrouter', 'nvidia', 'local']
@@ -83,6 +86,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     youtubeClientId: env.YOUTUBE_CLIENT_ID,
     youtubeClientSecret: env.YOUTUBE_CLIENT_SECRET,
     youtubeRefreshToken: env.YOUTUBE_REFRESH_TOKEN,
+    youtubeOAuthRedirectUri: env.YOUTUBE_OAUTH_REDIRECT_URI,
 
     dograhApiUrl: env.DOGRAH_API_URL,
     dograhApiKey: env.DOGRAH_API_KEY,
@@ -94,6 +98,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     reviewHourLondon: Number(env.REVIEW_HOUR_LONDON || 9),
     publishHourLondon: Number(env.PUBLISH_HOUR_LONDON || 18),
     reviewLimit: Number(env.REVIEW_LIMIT || 10),
+    autoApprove: env.AUTO_APPROVE === 'true',
+    autoPublish: env.AUTO_PUBLISH === 'true',
   }
 }
 

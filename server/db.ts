@@ -138,6 +138,34 @@ export class ShortsDatabase {
 
   audit(entityType: AuditEvent['entityType'], entityId: string, action: string, status?: string, message?: string, metadata: Record<string, unknown> = {}) { const event: AuditEvent = { id: randomUUID(), entityType, entityId, action, status, message, metadata, createdAt: nowIso() }; this.db.prepare('INSERT INTO audit_events (id,entity_type,entity_id,action,status,message,metadata_json,created_at) VALUES (@id,@entityType,@entityId,@action,@status,@message,@metadata,@createdAt)').run({ ...event, status: status || null, message: message || null, metadata: JSON.stringify(metadata) }); return event }
   listAudit(limit = 100): AuditEvent[] { return (this.db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT ?').all(limit) as Record<string, unknown>[]).map(row => ({ id: String(row.id), entityType: row.entity_type as AuditEvent['entityType'], entityId: String(row.entity_id), action: String(row.action), status: row.status ? String(row.status) : undefined, message: row.message ? String(row.message) : undefined, metadata: safeJsonParse(row.metadata_json as string, {}), createdAt: String(row.created_at) })) }
+  deleteTopic(id: string) {
+    const scripts = this.listScripts().filter(s => s.topicId === id)
+    for (const script of scripts) this.deleteScript(script.id)
+    this.db.prepare('DELETE FROM topics WHERE id = ?').run(id)
+    this.audit('topic', id, 'deleted', undefined, 'Topic deleted')
+    return { deleted: true }
+  }
+  deleteScript(id: string) {
+    const videos = this.listVideos().filter(v => v.scriptId === id)
+    for (const video of videos) this.deleteVideo(video.id)
+    this.db.prepare('DELETE FROM scripts WHERE id = ?').run(id)
+    this.audit('script', id, 'deleted', undefined, 'Script deleted')
+    return { deleted: true }
+  }
+  deleteVideo(id: string) {
+    const uploads = this.listUploads().filter(u => u.videoId === id)
+    for (const upload of uploads) this.deleteUpload(upload.id)
+    this.db.prepare('DELETE FROM videos WHERE id = ?').run(id)
+    this.audit('video', id, 'deleted', undefined, 'Video deleted')
+    return { deleted: true }
+  }
+  deleteUpload(id: string) {
+    this.db.prepare('DELETE FROM analytics WHERE upload_id = ?').run(id)
+    this.db.prepare('DELETE FROM uploads WHERE id = ?').run(id)
+    this.audit('upload', id, 'deleted', undefined, 'Upload deleted')
+    return { deleted: true }
+  }
+
   getSetting(key: string) { return (this.db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as { value: string } | undefined)?.value }
   setSetting(key: string, value: string) { this.db.prepare('INSERT INTO app_settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, value) }
 
