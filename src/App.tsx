@@ -5,6 +5,7 @@ const API_MODE = apiIsConfigured()
 
 type View = 'dashboard' | 'topics' | 'videos' | 'uploads' | 'settings' | 'audit'
 type DetailTarget = { view: View; id: string }
+type ConnectionState = 'connecting' | 'connected' | 'disconnected'
 type Status =
   | 'new'
   | 'selected'
@@ -236,50 +237,28 @@ const daysFromNow = (days: number, hours = 10) => {
   return date.toISOString()
 }
 
-const seedState: AppState = {
+// Empty initial state — real data comes from the API backend
+const emptyState: AppState = {
   automationPaused: false,
   audit: [],
-  readiness: { llm: true, youtube: false, youtubeSearch: false, dograh: false, visuals: false, renderer: true },
-  usage: { month: '2026-08', spentUsd: 0, budgetUsd: 5, remainingUsd: 5 },
-  topics: [
-    { id: 'topic-1', title: 'The hidden city beneath Cappadocia', niche: 'Travel', source: 'trending', status: 'scripted', metrics: { trendScore: 94, searchLift: 38, competition: 'Low' }, rationale: 'Search lift is accelerating and the visual reveal is strong enough to hold attention through the first loop.', createdAt: daysAgo(1, 9) },
-    { id: 'topic-2', title: 'Why octopuses edit their own genes', niche: 'Science', source: 'evergreen', status: 'selected', metrics: { trendScore: 78, searchLift: 16, competition: 'Medium' }, rationale: 'Evergreen curiosity topic with a surprising first sentence and three natural visual beats.', createdAt: daysAgo(2, 14) },
-    { id: 'topic-3', title: 'The 90-second reset for better focus', niche: 'Productivity', source: 'manual', status: 'new', metrics: { trendScore: 61, searchLift: 11, competition: 'High' }, rationale: 'Manual backlog item from the Monday content review.', createdAt: daysAgo(4, 11) },
-    { id: 'topic-4', title: 'A black hole the size of a city', niche: 'Science', source: 'trending', status: 'rejected', metrics: { trendScore: 41, searchLift: -4, competition: 'High' }, rationale: 'Rejected: current visual references are too generic for the channel style.', createdAt: daysAgo(7, 15) },
-    { id: 'topic-5', title: 'How Tokyo fits a whole life underground', niche: 'Travel', source: 'evergreen', status: 'scripted', metrics: { trendScore: 83, searchLift: 21, competition: 'Low' }, rationale: 'Strong repeatable format: one place, one unexpected system, one human payoff.', createdAt: daysAgo(9, 10) },
-    { id: 'topic-6', title: 'The color that does not exist', niche: 'Science', source: 'manual', status: 'new', metrics: { trendScore: 69, searchLift: 8, competition: 'Medium' }, rationale: 'Queued from the idea inbox for the next science batch.', createdAt: daysAgo(12, 13) },
-  ],
-  scripts: [
-    { id: 'script-1', topicId: 'topic-1', text: 'Beneath the soft hills of Cappadocia is a city built for 20,000 people. Derinkuyu drops eight levels underground: kitchens, stables, churches, and stone doors so heavy an army could not open them from the outside. The wildest part? It was not discovered until 1963, when a homeowner knocked down a wall and found a room behind it. Would you spend one night down there?', durationSec: 34, hook: 'There is a city under Cappadocia that hid for thousands of years.', cta: 'Would you spend one night down there?', titleSuggestion: 'The City Hidden Under Cappadocia', descriptionSuggestion: 'A city for 20,000 people was hiding beneath an ordinary home.', tagsSuggestion: ['travel facts', 'cappadocia', 'history', 'hidden places'], status: 'approved', createdAt: daysAgo(1, 10) },
-    { id: 'script-2', topicId: 'topic-5', text: 'Tokyo has a whole world beneath the streets. Underground malls, rivers, train platforms, and even emergency farms make the city feel like it has a second floor below ground. It is not just about saving space: these systems keep millions of people moving when the weather above turns dangerous.', durationSec: 29, hook: 'Tokyo has a second city hiding underneath the first.', cta: 'Which underground place would you explore?', titleSuggestion: 'Tokyo Has a Secret Second City', descriptionSuggestion: 'The hidden infrastructure that keeps Tokyo moving.', tagsSuggestion: ['tokyo', 'travel', 'city facts'], status: 'approved', createdAt: daysAgo(9, 11) },
-  ],
-  videos: [
-    { id: 'video-1', scriptId: 'script-1', audioUrl: 'https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8c8a73467.mp3?filename=motivational-epic-music-116945.mp3', visualAssets: [imageUrls[0], imageUrls[1], imageUrls[2]], finalVideoUrl: 'https://cdn.coverr.co/videos/coverr-aerial-view-of-a-mountain-road-1576/1080p.mp4', thumbnailUrl: thumbUrls[0], status: 'ready', createdAt: daysAgo(1, 11) },
-    { id: 'video-2', scriptId: 'script-2', audioUrl: 'https://cdn.pixabay.com/download/audio/2022/10/25/audio_9469e6a9c.mp3?filename=ambient-piano-amp-strings-124990.mp3', visualAssets: [imageUrls[3], imageUrls[1]], finalVideoUrl: 'https://cdn.coverr.co/videos/coverr-city-traffic-at-night-1573/1080p.mp4', thumbnailUrl: thumbUrls[1], status: 'ready', createdAt: daysAgo(9, 12) },
-    { id: 'video-3', scriptId: 'script-2', audioUrl: undefined, visualAssets: [], finalVideoUrl: undefined, thumbnailUrl: undefined, status: 'failed', createdAt: daysAgo(3, 16) },
-    { id: 'video-4', scriptId: 'script-1', audioUrl: undefined, visualAssets: [imageUrls[2]], finalVideoUrl: undefined, thumbnailUrl: thumbUrls[2], status: 'rendering', createdAt: daysAgo(0, 8) },
-  ],
-  uploads: [
-    { id: 'upload-1', videoId: 'video-1', youtubeVideoId: 'dQw4w9WgXcQ', youtubeUrl: 'https://youtube.com/shorts/dQw4w9WgXcQ', title: 'The City Hidden Under Cappadocia', description: 'A city for 20,000 people was hiding beneath an ordinary home. #shorts', tags: ['travel facts', 'cappadocia', 'history'], thumbnailUrl: thumbUrls[0], scheduledAt: daysAgo(0, 8), status: 'published', createdAt: daysAgo(1, 12) },
-    { id: 'upload-2', videoId: 'video-2', youtubeVideoId: 'a1b2c3d4e5F', youtubeUrl: 'https://youtube.com/shorts/a1b2c3d4e5F', title: 'Tokyo Has a Secret Second City', description: 'The hidden infrastructure that keeps Tokyo moving. #shorts', tags: ['tokyo', 'travel', 'city facts'], thumbnailUrl: thumbUrls[1], scheduledAt: daysAgo(9, 13), status: 'published', createdAt: daysAgo(9, 14) },
-    { id: 'upload-3', videoId: 'video-4', title: 'Why Your Brain Loves Tiny Wins', description: 'A short experiment for making progress feel easier.', tags: ['productivity', 'focus'], thumbnailUrl: thumbUrls[3], scheduledAt: daysFromNow(1, 9), status: 'scheduled', createdAt: daysAgo(0, 9) },
-    { id: 'upload-4', videoId: 'video-3', title: 'The Science of a Perfect Nap', description: 'Why 20 minutes can change your entire afternoon.', tags: ['science', 'sleep'], thumbnailUrl: thumbUrls[2], status: 'failed', createdAt: daysAgo(3, 17) },
-  ],
-  analytics: [
-    { id: 'analytics-1', uploadId: 'upload-1', views: 128400, averageViewDurationSec: 22.8, swipeAwayRate: 31.4, likes: 7400, comments: 316, subscribersGained: 842, estimatedRevenue: 18.42, fetchedAt: daysAgo(0, 7) },
-    { id: 'analytics-2', uploadId: 'upload-2', views: 86300, averageViewDurationSec: 18.9, swipeAwayRate: 38.2, likes: 5100, comments: 188, subscribersGained: 534, estimatedRevenue: 11.24, fetchedAt: daysAgo(1, 7) },
-    { id: 'analytics-3', uploadId: 'upload-3', views: 0, averageViewDurationSec: 0, swipeAwayRate: 0, likes: 0, comments: 0, subscribersGained: 0, estimatedRevenue: 0, fetchedAt: daysAgo(0, 9) },
-    { id: 'analytics-4', uploadId: 'upload-4', views: 0, averageViewDurationSec: 0, swipeAwayRate: 0, likes: 0, comments: 0, subscribersGained: 0, estimatedRevenue: 0, fetchedAt: daysAgo(3, 17) },
-  ],
+  readiness: null,
+  usage: null,
+  topics: [],
+  scripts: [],
+  videos: [],
+  uploads: [],
+  analytics: [],
 }
 
-const STORAGE_KEY = 'shorts-autopilot-state-v1'
 function loadState(): AppState {
+  // In API mode, always start empty — real data comes from backend
+  if (API_MODE) return emptyState
+  // Offline demo mode: use localStorage cache
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? JSON.parse(raw) as AppState : seedState
+    const raw = localStorage.getItem('shorts-autopilot-state-v1')
+    return raw ? JSON.parse(raw) as AppState : emptyState
   } catch {
-    return seedState
+    return emptyState
   }
 }
 function formatNumber(value: number) { return new Intl.NumberFormat('en-US', { notation: value > 9999 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(value) }
@@ -310,18 +289,31 @@ function App() {
   const [topicNiche, setTopicNiche] = useState('all')
   const [uploadFilter, setUploadFilter] = useState('all')
   const [toast, setToast] = useState<string | null>(null)
+  const [connection, setConnection] = useState<ConnectionState>(API_MODE ? 'connecting' : 'connected')
 
   const refreshFromApi = async () => {
     if (!API_MODE) return
-    const remote = await apiRequest<{ topics: Topic[]; scripts: Script[]; videos: Video[]; uploads: Upload[]; analytics: Analytics[]; audit: AuditEvent[] }>('/api/state')
-    const readiness = await apiRequest<{ providers: ProviderReadiness; config: { automationPaused: boolean; llmProvider: string; monthlyAiBudgetUsd: number }; usage: UsageSummary }>('/api/readiness')
-    setState(current => ({ ...current, ...remote, readiness: readiness.providers, usage: readiness.usage, automationPaused: readiness.config.automationPaused }))
+    try {
+      const remote = await apiRequest<{ topics: Topic[]; scripts: Script[]; videos: Video[]; uploads: Upload[]; analytics: Analytics[]; audit: AuditEvent[] }>('/api/state')
+      const readiness = await apiRequest<{ providers: ProviderReadiness; config: { automationPaused: boolean; llmProvider: string; monthlyAiBudgetUsd: number }; usage: UsageSummary }>('/api/readiness')
+      setState(current => ({ ...current, ...remote, readiness: readiness.providers, usage: readiness.usage, automationPaused: readiness.config.automationPaused }))
+      setConnection('connected')
+    } catch {
+      setConnection('disconnected')
+      throw new Error('Backend not reachable')
+    }
   }
 
-  useEffect(() => { if (!API_MODE) localStorage.setItem(STORAGE_KEY, JSON.stringify(state)) }, [state])
+  useEffect(() => { if (!API_MODE) localStorage.setItem('shorts-autopilot-state-v1', JSON.stringify(state)) }, [state])
   useEffect(() => {
-    if (!API_MODE) return
-    refreshFromApi().catch(error => showToast(error instanceof Error ? `API unavailable: ${error.message}` : 'API unavailable'))
+    if (!API_MODE) { setConnection('connected'); return }
+    refreshFromApi().catch(() => { /* connection state already set */ })
+    // Poll every 10 seconds while disconnected
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      refreshFromApi().catch(() => {})
+    }, 10000)
+    return () => clearInterval(interval)
   }, [])
   useEffect(() => {
     if (!toast) return
@@ -420,17 +412,34 @@ function App() {
     <Sidebar view={view} open={mobileNavOpen} automationPaused={state.automationPaused} onNavigate={navigate} onClose={() => setMobileNavOpen(false)} onToggleAutomation={toggleAutomation} />
     <main className="main-shell">
       <Topbar view={view} onMenu={() => setMobileNavOpen(true)} />
+      {connection === 'disconnected' && <ConnectionBanner onRetry={() => refreshFromApi().catch(() => {})} />}
+      {connection === 'connecting' && <div className="connection-loading"><div className="loading-spinner" /><span>Connecting to backend...</span></div>}
       <div className="page-content">{renderPage()}</div>
     </main>
     {selectedTarget && <DetailPanel view={selectedTarget.view} id={selectedTarget.id} state={state} scriptsByTopic={scriptsByTopic} scriptsById={scriptsById} videosById={videosById} analyticsByUpload={analyticsByUpload} onClose={closeDetail} onGenerate={generateScript} onReject={rejectTopic} onRerender={rerenderVideo} onResync={resyncAnalytics} onReupload={reupload} onApprove={approveForPublish} />}
     {toast && <div className="toast"><div className="toast-icon"><Icon name="check" size={15} /></div><span>{toast}</span><button onClick={() => setToast(null)} aria-label="Dismiss"><Icon name="x" size={15} /></button></div>}
   </div>
-}function Sidebar({ view, open, automationPaused, onNavigate, onClose, onToggleAutomation }: { view: View; open: boolean; automationPaused: boolean; onNavigate: (view: View) => void; onClose: () => void; onToggleAutomation: () => void }) {
+}
+
+function ConnectionBanner({ onRetry }: { onRetry: () => void }) {
+  return <div className="connection-banner">
+    <div className="connection-banner-content">
+      <Icon name="alert" size={16} />
+      <div>
+        <strong>Backend not connected</strong>
+        <span>Start the API server with <code>npm run dev:api</code> to see your real data.</span>
+      </div>
+      <button className="action-button button-primary" onClick={onRetry}><Icon name="refresh" size={14} />Retry</button>
+    </div>
+  </div>
+}
+
+function Sidebar({ view, open, automationPaused, onNavigate, onClose, onToggleAutomation }: { view: View; open: boolean; automationPaused: boolean; onNavigate: (view: View) => void; onClose: () => void; onToggleAutomation: () => void }) {
   const items: { id: View; label: string; icon: IconName; count?: string }[] = [
     { id: 'dashboard', label: 'Dashboard', icon: 'grid' },
-    { id: 'topics', label: 'Topics', icon: 'spark', count: '06' },
-    { id: 'videos', label: 'Videos', icon: 'film', count: '04' },
-    { id: 'uploads', label: 'Uploads', icon: 'upload', count: '04' },
+    { id: 'topics', label: 'Topics', icon: 'spark' },
+    { id: 'videos', label: 'Videos', icon: 'film' },
+    { id: 'uploads', label: 'Uploads', icon: 'upload' },
     { id: 'audit', label: 'Audit log', icon: 'audit' },
     { id: 'settings', label: 'Settings', icon: 'settings' },
   ] 
