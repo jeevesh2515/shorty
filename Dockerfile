@@ -12,8 +12,8 @@ COPY package*.json ./
 RUN npm ci
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
-COPY --from=build /app/data ./data
 COPY --from=build /app/tsconfig.server.json ./tsconfig.server.json
+RUN mkdir -p /app/data/media
 ENV NODE_ENV=production
 ENV PORT=8787
 ENV STATIC_DIR=/app/dist

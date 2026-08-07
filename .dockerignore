@@ -1,0 +1,17 @@
+node_modules
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+data
+graphify-out
+*.log
+npm-debug.log*
+.DS_Store
+.vscode
+.idea
+coverage
+.planning
+10_MEMORY.md
+MEGA_PROMPT.md

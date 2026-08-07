@@ -35,3 +35,4 @@ yarn-error.log*
 
 # Temp outputs
 graphify-out/
+.vercel
