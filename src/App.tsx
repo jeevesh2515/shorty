@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
+import posthog from 'posthog-js'
 import { apiIsConfigured, apiRequest } from './api'
 
 const API_MODE = apiIsConfigured()
+const POSTHOG_CONFIGURED = Boolean(import.meta.env.VITE_POSTHOG_KEY && import.meta.env.VITE_POSTHOG_HOST)
+const capture: typeof posthog.capture = (...args) => {
+  if (POSTHOG_CONFIGURED) posthog.capture(...args)
+}
 
 type View = 'dashboard' | 'topics' | 'videos' | 'uploads' | 'settings' | 'audit'
 type DetailTarget = { view: View; id: string }
@@ -352,6 +357,7 @@ function App() {
       try {
         await apiRequest('/api/runs/manual', { method: 'POST', body: JSON.stringify({ niche: 'Productivity' }) })
         await refreshFromApi()
+        capture('manual_short_run_completed', { execution_mode: 'api' })
         showToast('Manual pipeline completed and is ready for review')
       } catch (error) { showToast(error instanceof Error ? error.message : 'Manual pipeline failed') }
       return
@@ -368,6 +374,7 @@ function App() {
     const upload: Upload = { id: uploadId, videoId, title: script.titleSuggestion!, description: script.descriptionSuggestion, tags: script.tagsSuggestion, thumbnailUrl: video.thumbnailUrl, scheduledAt: daysFromNow(1, 9), status: 'scheduled', createdAt: now }
     const analytics: Analytics = { id: `analytics-${stamp}`, uploadId, views: 0, averageViewDurationSec: 0, swipeAwayRate: 0, likes: 0, comments: 0, subscribersGained: 0, estimatedRevenue: 0, fetchedAt: now }
     updateState(current => ({ ...current, topics: [topic, ...current.topics], scripts: [script, ...current.scripts], videos: [video, ...current.videos], uploads: [upload, ...current.uploads], analytics: [analytics, ...current.analytics] }))
+    capture('manual_short_run_completed', { execution_mode: 'offline' })
     showToast('Manual Short created and scheduled for tomorrow at 9:00 AM')
   }
 
@@ -376,6 +383,7 @@ function App() {
       try {
         const result = await apiRequest<{ provider: string }>('/api/topics/' + topic.id + '/script', { method: 'POST' })
         await refreshFromApi()
+        capture('script_generation_completed', { execution_mode: 'api' })
         showToast(`Script generated with ${result.provider}`)
       } catch (error) { showToast(error instanceof Error ? error.message : 'Script generation failed') }
       return
@@ -383,12 +391,14 @@ function App() {
     const existing = scriptsByTopic.get(topic.id)
     if (existing) {
       updateState(current => ({ ...current, scripts: current.scripts.map(item => item.id === existing.id ? { ...item, status: 'approved' } : item), topics: current.topics.map(item => item.id === topic.id ? { ...item, status: 'scripted' } : item) }))
+      capture('script_generation_completed', { execution_mode: 'offline', reused_existing_script: true })
       showToast('Existing script approved and moved to production')
       return
     }
     const stamp = Date.now()
     const script: Script = { id: `script-${stamp}`, topicId: topic.id, text: `Here is the surprising part about ${topic.title.toLowerCase()}: the obvious explanation is not the whole story. In the next 30 seconds, you will see the detail most people miss, why it matters, and the one question it leaves us with. Save this one for later.`, durationSec: 30, hook: `The part nobody tells you about ${topic.title.toLowerCase()}.`, cta: 'Follow for the next unexpected detail.', titleSuggestion: topic.title, descriptionSuggestion: `The detail most people miss about ${topic.title.toLowerCase()}.`, tagsSuggestion: [topic.niche.toLowerCase(), 'shorts', 'facts'], status: 'approved', createdAt: new Date().toISOString() }
     updateState(current => ({ ...current, scripts: [script, ...current.scripts], topics: current.topics.map(item => item.id === topic.id ? { ...item, status: 'scripted' } : item) }))
+    capture('script_generation_completed', { execution_mode: 'offline', reused_existing_script: false })
     showToast('Script generated, approved, and ready for media')
   }
 
@@ -398,6 +408,7 @@ function App() {
         const created = await apiRequest<Video>('/api/videos', { method: 'POST', body: JSON.stringify({ scriptId }) })
         await apiRequest(`/api/videos/${created.id}/render`, { method: 'POST' })
         await refreshFromApi()
+        capture('video_production_completed', { execution_mode: 'api' })
         showToast('Video created and rendered successfully')
       } catch (error) { showToast(error instanceof Error ? error.message : 'Video production failed') }
       return
@@ -406,22 +417,24 @@ function App() {
     const videoId = `video-${Date.now()}`
     const video: Video = { id: videoId, scriptId, visualAssets: [imageUrls[0], imageUrls[1]], thumbnailUrl: thumbUrls[0], finalVideoUrl: 'https://cdn.coverr.co/videos/coverr-aerial-view-of-a-mountain-road-1576/1080p.mp4', status: 'ready', createdAt: now }
     updateState(current => ({ ...current, videos: [video, ...current.videos] }))
+    capture('video_production_completed', { execution_mode: 'offline' })
     showToast('Video produced and added to queue')
   }
 
-  const rejectTopic = async (topicId: string) => { if (API_MODE) { try { await apiRequest(`/api/topics/${topicId}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'rejected' }) }); await refreshFromApi(); showToast('Topic rejected and removed from the active queue') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to reject topic') }; return } updateState(current => ({ ...current, topics: current.topics.map(topic => topic.id === topicId ? { ...topic, status: 'rejected' } : topic) })); showToast('Topic rejected and removed from the active queue') }
-  const rerenderVideo = async (videoId: string) => { if (API_MODE) { try { await apiRequest(`/api/videos/${videoId}/render`, { method: 'POST' }); await refreshFromApi(); showToast('Video rendered successfully with the configured media pipeline') } catch (error) { showToast(error instanceof Error ? error.message : 'Video render failed') }; return } updateState(current => ({ ...current, videos: current.videos.map(video => video.id === videoId ? { ...video, status: 'ready', finalVideoUrl: video.finalVideoUrl || 'https://cdn.coverr.co/videos/coverr-aerial-view-of-a-mountain-road-1576/1080p.mp4' } : video) })); showToast('Render retried successfully — video is ready') }
-  const resyncAnalytics = async (uploadId: string) => { if (API_MODE) { try { await apiRequest('/api/analytics/sync', { method: 'POST' }); await refreshFromApi(); showToast('Analytics synced from YouTube') } catch (error) { showToast(error instanceof Error ? error.message : 'Analytics sync failed') }; return } updateState(current => ({ ...current, analytics: current.analytics.map(item => item.uploadId === uploadId ? { ...item, views: item.views + (item.views ? Math.round(item.views * 0.06) : 4200), likes: item.likes + (item.likes ? Math.round(item.likes * 0.04) : 230), subscribersGained: item.subscribersGained + (item.subscribersGained ? 19 : 28), fetchedAt: new Date().toISOString() } : item) })); showToast('Analytics synced just now') }
+  const rejectTopic = async (topicId: string) => { if (API_MODE) { try { await apiRequest(`/api/topics/${topicId}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'rejected' }) }); await refreshFromApi(); capture('topic_rejected', { execution_mode: 'api' }); showToast('Topic rejected and removed from the active queue') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to reject topic') }; return } updateState(current => ({ ...current, topics: current.topics.map(topic => topic.id === topicId ? { ...topic, status: 'rejected' } : topic) })); capture('topic_rejected', { execution_mode: 'offline' }); showToast('Topic rejected and removed from the active queue') }
+  const rerenderVideo = async (videoId: string) => { if (API_MODE) { try { await apiRequest(`/api/videos/${videoId}/render`, { method: 'POST' }); await refreshFromApi(); capture('video_rerender_completed', { execution_mode: 'api' }); showToast('Video rendered successfully with the configured media pipeline') } catch (error) { showToast(error instanceof Error ? error.message : 'Video render failed') }; return } updateState(current => ({ ...current, videos: current.videos.map(video => video.id === videoId ? { ...video, status: 'ready', finalVideoUrl: video.finalVideoUrl || 'https://cdn.coverr.co/videos/coverr-aerial-view-of-a-mountain-road-1576/1080p.mp4' } : video) })); capture('video_rerender_completed', { execution_mode: 'offline' }); showToast('Render retried successfully — video is ready') }
+  const resyncAnalytics = async (uploadId: string) => { if (API_MODE) { try { await apiRequest('/api/analytics/sync', { method: 'POST' }); await refreshFromApi(); capture('analytics_sync_completed', { execution_mode: 'api' }); showToast('Analytics synced from YouTube') } catch (error) { showToast(error instanceof Error ? error.message : 'Analytics sync failed') }; return } updateState(current => ({ ...current, analytics: current.analytics.map(item => item.uploadId === uploadId ? { ...item, views: item.views + (item.views ? Math.round(item.views * 0.06) : 4200), likes: item.likes + (item.likes ? Math.round(item.likes * 0.04) : 230), subscribersGained: item.subscribersGained + (item.subscribersGained ? 19 : 28), fetchedAt: new Date().toISOString() } : item) })); capture('analytics_sync_completed', { execution_mode: 'offline' }); showToast('Analytics synced just now') }
   const reupload = async (uploadId: string) => { if (API_MODE) { try { await apiRequest(`/api/uploads/${uploadId}/retry`, { method: 'POST' }); await refreshFromApi(); showToast('Upload retried successfully') } catch (error) { showToast(error instanceof Error ? error.message : 'Upload retry failed') }; return } updateState(current => ({ ...current, uploads: current.uploads.map(upload => upload.id === uploadId ? { ...upload, status: 'scheduled', scheduledAt: daysFromNow(1, 9), youtubeVideoId: undefined, youtubeUrl: undefined } : upload) })); showToast('Upload reset and scheduled for the next available slot') }
-  const approveForPublish = async (uploadId: string) => { if (API_MODE) { try { await apiRequest(`/api/uploads/${uploadId}/approve`, { method: 'POST' }); await refreshFromApi(); showToast('Approved for 18:00 Europe/London tomorrow') } catch (error) { showToast(error instanceof Error ? error.message : 'Approval failed') }; return } updateState(current => ({ ...current, uploads: current.uploads.map(upload => upload.id === uploadId ? { ...upload, status: 'approved_for_publish', scheduledAt: daysFromNow(1, 18) } : upload) })); showToast('Approved for 18:00 tomorrow') }
-  const toggleAutomation = async () => { const next = !state.automationPaused; if (API_MODE) { try { await apiRequest('/api/settings/automation', { method: 'PATCH', body: JSON.stringify({ paused: next }) }); await refreshFromApi(); showToast(next ? 'Autopilot paused' : 'Autopilot resumed') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to update automation') }; return } updateState(current => ({ ...current, automationPaused: next })); showToast(next ? 'Autopilot paused' : 'Autopilot resumed') }
-  const connectYouTube = async () => { if (!API_MODE) return; try { const redirect = await apiRequest<{ url: string }>('/api/auth/youtube'); window.location.href = redirect.url } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to start YouTube OAuth') } }
-  const disconnectYouTube = async () => { if (!API_MODE) return; try { await apiRequest('/api/auth/youtube/disconnect', { method: 'POST' }); await refreshFromApi(); showToast('YouTube disconnected') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to disconnect YouTube') } }
+  const approveForPublish = async (uploadId: string) => { if (API_MODE) { try { await apiRequest(`/api/uploads/${uploadId}/approve`, { method: 'POST' }); await refreshFromApi(); capture('upload_approved_for_publish', { execution_mode: 'api' }); showToast('Approved for 18:00 Europe/London tomorrow') } catch (error) { showToast(error instanceof Error ? error.message : 'Approval failed') }; return } updateState(current => ({ ...current, uploads: current.uploads.map(upload => upload.id === uploadId ? { ...upload, status: 'approved_for_publish', scheduledAt: daysFromNow(1, 18) } : upload) })); capture('upload_approved_for_publish', { execution_mode: 'offline' }); showToast('Approved for 18:00 tomorrow') }
+  const toggleAutomation = async () => { const next = !state.automationPaused; if (API_MODE) { try { await apiRequest('/api/settings/automation', { method: 'PATCH', body: JSON.stringify({ paused: next }) }); await refreshFromApi(); capture('automation_toggled', { automation_paused: next, execution_mode: 'api' }); showToast(next ? 'Autopilot paused' : 'Autopilot resumed') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to update automation') }; return } updateState(current => ({ ...current, automationPaused: next })); capture('automation_toggled', { automation_paused: next, execution_mode: 'offline' }); showToast(next ? 'Autopilot paused' : 'Autopilot resumed') }
+  const connectYouTube = async () => { if (!API_MODE) return; try { const redirect = await apiRequest<{ url: string }>('/api/auth/youtube'); capture('youtube_connection_started'); window.location.href = redirect.url } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to start YouTube OAuth') } }
+  const disconnectYouTube = async () => { if (!API_MODE) return; try { await apiRequest('/api/auth/youtube/disconnect', { method: 'POST' }); await refreshFromApi(); capture('youtube_disconnected'); showToast('YouTube disconnected') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to disconnect YouTube') } }
   const updateAutoPublish = async (autoApprove: boolean, autoPublish: boolean) => { if (!API_MODE) { updateState(current => ({ ...current, autoApprove, autoPublish })); return } try { await apiRequest('/api/settings/auto-publish', { method: 'PATCH', body: JSON.stringify({ autoApprove, autoPublish }) }); await refreshFromApi(); showToast('Auto-publish settings updated') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to update auto-publish settings') } }
   const createTopic = async () => {
-    if (API_MODE) { try { await apiRequest('/api/topics', { method: 'POST', body: JSON.stringify({ title: 'A new idea from the operator queue', niche: 'Productivity', source: 'manual', rationale: 'Added manually for the next content review.', metrics: { trendScore: 0, searchLift: 0, competition: 'Unscored' } }) }); await refreshFromApi(); showToast('New topic added to the idea queue') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to add topic') }; return }
+    if (API_MODE) { try { await apiRequest('/api/topics', { method: 'POST', body: JSON.stringify({ title: 'A new idea from the operator queue', niche: 'Productivity', source: 'manual', rationale: 'Added manually for the next content review.', metrics: { trendScore: 0, searchLift: 0, competition: 'Unscored' } }) }); await refreshFromApi(); capture('topic_created', { execution_mode: 'api' }); showToast('New topic added to the idea queue') } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to add topic') }; return }
     const topic: Topic = { id: `topic-${Date.now()}`, title: 'A new idea from the operator queue', niche: 'Productivity', source: 'manual', status: 'new', metrics: { trendScore: 0, searchLift: 0, competition: 'Unscored' }, rationale: 'Added manually for the next content review.', createdAt: new Date().toISOString() }
     updateState(current => ({ ...current, topics: [topic, ...current.topics] }))
+    capture('topic_created', { execution_mode: 'offline' })
     showToast('New topic added to the idea queue')
   }
 
@@ -475,12 +488,14 @@ function App() {
       try {
         const result = await apiRequest<{ provider: string }>('/api/topics/discover', { method: 'POST', body: JSON.stringify({ niche }) })
         await refreshFromApi()
+        capture('topic_discovery_completed', { execution_mode: 'api' })
         showToast(`Discovered new trending topics with ${result.provider}`)
       } catch (error) { showToast(error instanceof Error ? error.message : 'Topic discovery failed') }
       return
     }
     const topic: Topic = { id: `topic-discovered-${Date.now()}`, title: `The 2026 breakdown of ${niche}`, niche, source: 'trending', status: 'new', metrics: { trendScore: 88, searchLift: 24, competition: 'Low' }, rationale: 'Discovered from current trend metrics.', createdAt: new Date().toISOString() }
     updateState(current => ({ ...current, topics: [topic, ...current.topics] }))
+    capture('topic_discovery_completed', { execution_mode: 'offline' })
     showToast('Discovered new trending topic')
   }
 
@@ -489,10 +504,12 @@ function App() {
       try {
         const result = await apiRequest<{ judge: { judgeScore: number; judgeVerdict: string } }>(`/api/scripts/${scriptId}/judge`, { method: 'POST' })
         await refreshFromApi()
+        capture('script_judge_evaluated', { execution_mode: 'api' })
         showToast(`AI Judge Evaluation: ${result.judge.judgeScore}/10 (${result.judge.judgeVerdict.toUpperCase()})`)
       } catch (error) { showToast(error instanceof Error ? error.message : 'AI Judge evaluation failed') }
       return
     }
+    capture('script_judge_evaluated', { execution_mode: 'offline' })
     showToast('Evaluated script with AI Judge (9.2/10 Approved)')
   }
 
