@@ -77,6 +77,7 @@ describe('workflow.runScheduled', () => {
   it('skips when the run for the day has already completed', async () => {
     const db = new ShortsDatabase({ filename: ':memory:' })
     const config = { ...loadConfig({}), dbPath: ':memory:', mediaDir: join(tempRoot, 'media3'), automationPaused: false }
+    const workflow = new ShortsWorkflow(db, config)
     const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date())
     const year = parts.find(p => p.type === 'year')?.value
     const month = parts.find(p => p.type === 'month')?.value
