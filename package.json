@@ -22,6 +22,7 @@
   "dependencies": {
     "@vitejs/plugin-react": "latest",
     "better-sqlite3": "latest",
+    "posthog-js": "^1.414.0",
     "react": "latest",
     "react-dom": "latest",
     "typescript": "latest",
