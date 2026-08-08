@@ -1,8 +1,15 @@
 # Shorts Autopilot
 
-A low-cost, operator-first YouTube Shorts automation system. Ships fully
-working with **zero external credentials**; activates extra capabilities the
-moment you paste a single key from `REQUIRED_SECRETS.md`.
+A low-cost, operator-first YouTube Shorts automation system.
+
+**Zero-credential mode** (`npm run dev:all`) boots the full pipeline end to end
+and is useful for demos, development, and tests — but be clear about what it
+produces: scripts come from a deterministic local generator, visuals are
+generated illustration cards (explicitly **not** authentic footage), and the
+voiceover only exists on macOS via the system `say` fallback. Production-quality
+content — real scriptwriting, licensed footage, real TTS, and publishing —
+activates the moment you paste a key from `REQUIRED_SECRETS.md` (Pexels,
+Speaches/Dograh, Groq, YouTube OAuth).
 
 ## Zero-cost stack (recommended)
 
@@ -16,7 +23,25 @@ moment you paste a single key from `REQUIRED_SECRETS.md`.
 | Publishing | YouTube OAuth | Free | 3 OAuth keys |
 | Database | SQLite | **Free** | — |
 
-**Total monthly cost: $0** when using the free providers above.
+**Total monthly cost: $0** when using the free tiers above — but see the
+*Free isn't zero-effort* caveats below (free tiers carry rate limits and
+self-hosting TTS costs electricity).
+
+### Free isn't zero-effort
+
+- **Groq / OpenRouter / NVIDIA** free tiers are rate-limited (14.4k req/day,
+  free-model pools, or signup credits). A busy channel can exceed them.
+- **Pexels** allows 200 requests/hour; each topic costs several requests.
+- **Speaches / Dograh** are free but self-hosted — you run the Docker container.
+- **Railway** free tier is 500 hours/month and its filesystem is ephemeral
+  (SQLite + rendered media vanish on redeploy unless you add a volume).
+- **$0 never means production-ready.** Review-first mode is on for the first
+  `REVIEW_LIMIT` uploads, and two opt-in fail-closed quality gates exist:
+  - `REQUIRE_VIDEO_FOOTAGE=true` — refuses to render a topic that needs real
+    moving footage when only images/illustrations are available.
+  - `REQUIRE_RESEARCH=true` — refuses scripts whose factual claims have no
+    authoritative source URL (pubmed/doi/university).
+  See `.env.example` for both.
 
 ## What is implemented
 
@@ -29,6 +54,9 @@ moment you paste a single key from `REQUIRED_SECRETS.md`.
 - Node HTTP API with health/readiness/state/run/automation/audit endpoints.
 - Local LLM, visual, TTS, and FFmpeg fallbacks — including a
   dependency-free PNG renderer so the fallback runs wherever FFmpeg runs.
+  Rendered manifests are truthful: illustrative-only videos are flagged
+  `requiresSyntheticDisclosure` with a compliance note, and factual sources
+  travel from the script into the review panel.
 - **BYOK adapters for all 6 LLM providers:**
   - `local` — deterministic, zero cost, always available.
   - `groq` — **FREE** 14,400 req/day Llama 70B via Groq.
@@ -145,8 +173,8 @@ uses same-origin relative API paths.
 
 ```bash
 npm run build           # TypeScript + Vite + server bundle
-npm test                # 5 fast tests (~1 s)
-npm run test:full       # 4 slow tests including FFmpeg render (~30 s)
+npm test                # 5 fast unit tests (db, http, providers) ~1 s
+npm run test:full       # 14 tests including 3 real FFmpeg renders (~2 min)
 npm run api:smoke       # HTTP smoke against in-memory server
 npm run pipeline:smoke  # In-process FFmpeg pipeline including audit + render
 npm run docker:validate # Composes the docker-compose surface expectations
@@ -154,7 +182,9 @@ npm run docker:validate # Composes the docker-compose surface expectations
 
 All of the above run with **no secret configuration**. Adding `GROQ_API_KEY`,
 `YOUTUBE_CLIENT_ID`, etc. does not change which commands to run — they just
-make the corresponding adapter move from local-fallback to live.
+make the corresponding adapter move from local-fallback to live. Tests assert
+that renders are real, captions are burned in, and illustrative visuals are
+disclosed rather than passed off as footage.
 
 ## Where this lives in the project
 

@@ -13,7 +13,7 @@ async function main() {
   const workflow = new ShortsWorkflow(db, workflowConfig)
   const result = await workflow.runManual({ niche: 'Productivity', topicTitle: 'Why tiny habits compound without spending a dollar' })
   const mediaFiles = readdirSync(tempDir)
-  const mp4 = mediaFiles.find(file => file.endsWith('.mp4'))
+  const mp4 = mediaFiles.find(file => file === `${result.video.id}.mp4`) || mediaFiles.find(file => file.endsWith('.mp4'))
   if (!mp4) throw new Error('FFmpeg render did not produce an MP4 file')
   const size = statSync(join(tempDir, mp4)).size
   if (size < 1024) throw new Error(`Rendered MP4 suspiciously small: ${size} bytes`)

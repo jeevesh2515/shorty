@@ -42,6 +42,10 @@ export type ServerConfig = {
   // Visuals
   pexelsApiKey?: string
 
+  // Quality gates (fail-closed — default off to preserve existing behaviour)
+  requireVideoFootage: boolean
+  requireResearch: boolean
+
   // Budget / scheduler
   automationPaused: boolean
   monthlyAiBudgetUsd: number
@@ -67,7 +71,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     dbPath: env.SHORTS_DB_PATH || resolve(dataDir, 'shorts-autopilot.sqlite'),
     mediaDir: env.MEDIA_DIR || resolve(dataDir, 'media'),
     staticDir: env.STATIC_DIR || resolve(process.cwd(), 'dist'),
-    appOrigin: env.APP_ORIGIN || '*',
+    appOrigin: env.APP_ORIGIN || env.CORS_ORIGIN || '*',
     apiToken: env.API_TOKEN,
     maxBodyBytes: Number(env.MAX_BODY_BYTES || 1_000_000),
 
@@ -96,6 +100,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     dograhApiKey: env.DOGRAH_API_KEY,
     speachesApiUrl: env.SPEACHES_API_URL,
     pexelsApiKey: env.PEXELS_API_KEY,
+
+    requireVideoFootage: env.REQUIRE_VIDEO_FOOTAGE === 'true',
+    requireResearch: env.REQUIRE_RESEARCH === 'true',
 
     automationPaused: env.AUTOMATION_PAUSED === 'true',
     monthlyAiBudgetUsd: Number(env.MONTHLY_AI_BUDGET_USD || 5),

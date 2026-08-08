@@ -4,8 +4,9 @@ import { writeFile } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
 import { promisify } from 'node:util'
 import type { ServerConfig } from './config.js'
+import { DomainError } from './domain.js'
 import type { Analytics, CaptionCue, RenderManifest, Script, Topic, Video, VisualAsset } from './domain.js'
-import { buildGradientPng } from './png.js'
+import { buildCaptionPng, buildGradientPng } from './png.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -19,6 +20,18 @@ export async function requestJson(url: string, init: RequestInit = {}) {
 }
 
 export type ScriptDraft = Omit<Script, 'id' | 'topicId' | 'createdAt' | 'updatedAt'>
+
+/** Keep only http(s) URLs, deduplicated, max 4 — used for the research quality gate. */
+function normalizeSources(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  return value
+    .map(item => String(item).trim())
+    .filter(item => /^https?:\/\//.test(item))
+    .filter(item => !seen.has(item) && seen.add(item))
+    .slice(0, 4)
+}
+
 export function localScript(topic: Topic): ScriptDraft {
   return {
     text: `Here is the surprising part about ${topic.title.toLowerCase()}: the obvious explanation is not the whole story. In the next 30 seconds, you will see the detail most people miss, why it matters, and the one question it leaves us with. Save this one for later.`,
@@ -28,6 +41,7 @@ export function localScript(topic: Topic): ScriptDraft {
     titleSuggestion: topic.title.slice(0, 95),
     descriptionSuggestion: `The detail most people miss about ${topic.title.toLowerCase()}.`,
     tagsSuggestion: [topic.niche.toLowerCase(), 'shorts', 'facts'],
+    factualSources: [],
     status: 'draft',
   }
 }
@@ -76,7 +90,7 @@ async function openAiCompatibleScript(
         {
           role: 'system',
           content:
-            'You write original, factual YouTube Shorts scripts. Return ONLY valid JSON with these keys: text, durationSec, hook, cta, titleSuggestion, descriptionSuggestion, tagsSuggestion.',
+            'You write original, factual YouTube Shorts scripts. Back every factual claim with authoritative sources. Return ONLY valid JSON with these keys: text, durationSec, hook, cta, titleSuggestion, descriptionSuggestion, tagsSuggestion, factualSources (array of 1-3 authoritative http(s) URLs such as pubmed/doi/university pages backing the surprising claim).',
         },
         {
           role: 'user',
@@ -96,7 +110,7 @@ async function openAiCompatibleScript(
   const parsed = JSON.parse(cleaned)
   const rawTags = parsed.tagsSuggestion
   const tagsSuggestion = Array.isArray(rawTags) ? rawTags.map((t: unknown) => String(t).replace(/^#/, '').trim()).filter(Boolean) : typeof rawTags === 'string' ? (rawTags as string).split(/\s+/).map((t: string) => t.replace(/^#/, '').trim()).filter(Boolean) : [topic.niche.toLowerCase(), 'shorts', 'facts']
-  return { ...localScript(topic), ...parsed, tagsSuggestion, status: 'draft' }
+  return { ...localScript(topic), ...parsed, tagsSuggestion, factualSources: normalizeSources(parsed.factualSources), status: 'draft' }
 }
 
 async function openAiCompatibleJudge(
@@ -364,8 +378,8 @@ export async function generateScript(
   if (config.llmProvider === 'gemini' && config.geminiApiKey) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent?key=${config.geminiApiKey}`
     const promptText = feedbackPrompt
-      ? `Write an original 15-45s YouTube Short script about "${topic.title}" in ${topic.niche}. PREVIOUS ATTEMPT FAILED AI JUDGE (${feedbackPrompt}). Make hook stronger, remove fluff. Return ONLY JSON with keys: text, durationSec, hook, cta, titleSuggestion, descriptionSuggestion, tagsSuggestion.`
-      : `Write an original 15-45 second YouTube Short script about "${topic.title}" in the ${topic.niche} niche. Return ONLY JSON with keys: text, durationSec, hook, cta, titleSuggestion, descriptionSuggestion, tagsSuggestion.`
+      ? `Write an original 15-45s YouTube Short script about "${topic.title}" in ${topic.niche}. PREVIOUS ATTEMPT FAILED AI JUDGE (${feedbackPrompt}). Make hook stronger, remove fluff. Return ONLY JSON with keys: text, durationSec, hook, cta, titleSuggestion, descriptionSuggestion, tagsSuggestion, factualSources (array of 1-3 authoritative http(s) URLs backing the surprising claim).`
+      : `Write an original 15-45 second YouTube Short script about "${topic.title}" in the ${topic.niche} niche. Back every factual claim with authoritative sources. Return ONLY JSON with keys: text, durationSec, hook, cta, titleSuggestion, descriptionSuggestion, tagsSuggestion, factualSources (array of 1-3 authoritative http(s) URLs such as pubmed/doi/university pages).`
     const data = await requestJson(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -379,8 +393,9 @@ export async function generateScript(
         ?.parts as Record<string, unknown>[]
     )[0]?.text as string | undefined
     if (!content) throw new Error('Gemini returned no script content')
+    const parsed = JSON.parse(content)
     return {
-      draft: { ...localScript(topic), ...JSON.parse(content), status: 'draft' },
+      draft: { ...localScript(topic), ...parsed, factualSources: normalizeSources(parsed.factualSources), status: 'draft' },
       provider: `gemini:${config.geminiModel}`,
       estimatedCostUsd: 0.002,
     }
@@ -440,7 +455,7 @@ export async function generateScript(
         {
           role: 'system',
           content:
-            'You write original, factual YouTube Shorts scripts. Return ONLY valid JSON with these keys: text, durationSec, hook, cta, titleSuggestion, descriptionSuggestion, tagsSuggestion.',
+            'You write original, factual YouTube Shorts scripts. Back every factual claim with authoritative sources. Return ONLY valid JSON with these keys: text, durationSec, hook, cta, titleSuggestion, descriptionSuggestion, tagsSuggestion, factualSources (array of 1-3 authoritative http(s) URLs such as pubmed/doi/university pages backing the surprising claim).',
         },
         { role: 'user', content: userContent },
       ],
@@ -448,8 +463,9 @@ export async function generateScript(
       512,
     )
     const cleaned = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+    const parsed = JSON.parse(cleaned)
     return {
-      draft: { ...localScript(topic), ...JSON.parse(cleaned), status: 'draft' },
+      draft: { ...localScript(topic), ...parsed, factualSources: normalizeSources(parsed.factualSources), status: 'draft' },
       provider: `ollama:${config.ollamaModel}`,
       estimatedCostUsd: 0,
     }
@@ -622,8 +638,8 @@ export async function generateVoiceover(
   outputDir: string,
 ): Promise<{ audioUrl?: string; provider: string }> {
   const baseUrl = config.speachesApiUrl
-  if (!baseUrl) return { provider: 'not-configured' }
   mkdirSync(outputDir, { recursive: true })
+  if (!baseUrl) return localMacVoiceover(text, outputDir)
   try {
     const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/audio/speech`, {
       method: 'POST',
@@ -633,14 +649,29 @@ export async function generateVoiceover(
       },
       body: JSON.stringify({ model: 'tts-1', voice: 'alloy', input: text, response_format: 'mp3' }),
     })
-    if (!response.ok) return { provider: 'local-fallback' }
+    if (!response.ok) return localMacVoiceover(text, outputDir)
     const fileName = `voice-${Date.now()}.mp3`
     const path = join(outputDir, fileName)
     const buffer = Buffer.from(await response.arrayBuffer())
     await import('node:fs/promises').then(fs => fs.writeFile(path, buffer))
     return { audioUrl: `/media/${fileName}`, provider: 'speaches-openai-compatible' }
   } catch (_err) {
-    return { provider: 'local-fallback' }
+    return localMacVoiceover(text, outputDir)
+  }
+}
+
+async function localMacVoiceover(text: string, outputDir: string): Promise<{ audioUrl?: string; provider: string }> {
+  // Development-only zero-cost fallback. Production should use Speaches/Dograh.
+  if (process.platform !== 'darwin') return { provider: 'not-configured' }
+  const baseName = `voice-${Date.now()}`
+  const aiff = join(outputDir, `${baseName}.aiff`)
+  const mp3 = join(outputDir, `${baseName}.mp3`)
+  try {
+    await execFileAsync('say', ['-v', 'Samantha', '-o', aiff, text])
+    await runFfmpeg(['-y', '-i', aiff, '-codec:a', 'libmp3lame', '-b:a', '128k', mp3])
+    return { audioUrl: `/media/${baseName}.mp3`, provider: 'macos-say-development-fallback' }
+  } catch {
+    return { provider: 'not-configured' }
   }
 }
 // ---------------------------------------------------------------------------
@@ -655,17 +686,26 @@ export async function renderVideo(
   script: Script,
   config: ServerConfig,
   mediaDir: string,
-): Promise<{ finalVideoUrl: string; thumbnailUrl?: string; provider: string }> {
-  try {
+): Promise<{ finalVideoUrl: string; thumbnailUrl?: string; provider: string; renderManifest: RenderManifest }> {
     mkdirSync(mediaDir, { recursive: true })
     const output = join(mediaDir, `${video.id}.mp4`)
     const duration = Math.min(45, Math.max(15, script.durationSec))
-    const manifest = buildRenderManifest(script, video.renderManifest, duration)
     const assets = video.visualAssets.length ? video.visualAssets : [{ path: '', type: 'illustration' as const, source: 'local-fallback', role: 'Explained science visual' }]
     const sceneDuration = duration / assets.length
     const scenePaths: string[] = []
+    // Truthfulness is decided by what actually got staged, not by the asset plan:
+    // a video asset whose download fails is a generated illustration in the output.
+    let stagedSynthetic = false
+    const hasVideoPlan = assets.some(asset => asset.type === 'video')
     for (const [index, asset] of assets.entries()) {
-      const source = await stageVisualAsset(asset, mediaDir, video.id, index, script.titleSuggestion || script.hook)
+      const staged = await stageVisualAsset(asset, mediaDir, video.id, index, script.titleSuggestion || script.hook)
+      if (staged.synthetic) {
+        stagedSynthetic = true
+        if (config.requireVideoFootage && asset.type === 'video') {
+          throw new DomainError('FOOTAGE_REQUIRED', `Authentic video asset ${index} failed to stage (${staged.reason || 'download failed'}) and was not silently replaced with generated visuals`, 422)
+        }
+      }
+      const source = staged.path
       const scene = join(mediaDir, `${video.id}-scene-${index}.mp4`)
       const sceneFrames = Math.round(sceneDuration * 30)
       const filter = asset.type === 'video'
@@ -677,6 +717,7 @@ export async function renderVideo(
       await runFfmpeg(args)
       scenePaths.push(scene)
     }
+    const manifest = buildRenderManifest(script, video.renderManifest, duration, stagedSynthetic, hasVideoPlan)
     const listFile = join(mediaDir, `${video.id}-scenes.txt`)
     await writeFile(listFile, scenePaths.map(path => `file '${path.replace(/'/g, "'\\''")}'`).join('\n'))
     const stitched = join(mediaDir, `${video.id}-stitched.mp4`)
@@ -685,41 +726,31 @@ export async function renderVideo(
     await writeFile(captions, toSrt(manifest.captions))
     const audioPath = video.audioUrl?.replace(/^\/media\//, '')
     const localAudio = audioPath ? join(mediaDir, audioPath) : undefined
-    const escapedPath = captions.replace(/\\/g, '/').replace(/:/g, '\\:')
-    const subtitleFilter = `subtitles=${escapedPath}:force_style='FontName=Arial,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00120A00,BorderStyle=1,Outline=3,Alignment=2,MarginV=220'`
+    const captionImages: Array<{ path: string; duration: number }> = []
+    for (const [index, cue] of manifest.captions.entries()) {
+      const image = join(mediaDir, `${video.id}-caption-${index}.png`)
+      await writeFile(image, buildCaptionPng({ width: 1080, height: 1920, text: cue.text }))
+      captionImages.push({ path: image, duration: cue.endSec - cue.startSec })
+    }
+    const captionList = join(mediaDir, `${video.id}-captions.txt`)
+    const captionVideo = join(mediaDir, `${video.id}-captions.mov`)
+    const captionEntries = captionImages.flatMap(item => [`file '${item.path.replace(/'/g, "'\\''")}'`, `duration ${item.duration}`])
+    const lastCaption = captionImages.at(-1)
+    if (lastCaption) captionEntries.push(`file '${lastCaption.path.replace(/'/g, "'\\''")}'`)
+    await writeFile(captionList, captionEntries.join('\n'))
+    await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', captionList, '-r', '30', '-c:v', 'qtrle', '-pix_fmt', 'argb', captionVideo])
 
     const audioArgs = localAudio && existsSync(localAudio)
       ? ['-i', localAudio, '-shortest']
       : ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', String(duration)]
 
-    try {
-      await runFfmpeg([
-        '-y', '-i', stitched, ...audioArgs,
-        '-vf', subtitleFilter,
-        '-map', '0:v:0', '-map', '1:a:0',
-        '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
-        '-r', '30', '-movflags', '+faststart', output,
-      ])
-    } catch (_subError) {
-      try {
-        // Retry with subtitles but without faststart if atom shifting failed
-        await runFfmpeg([
-          '-y', '-i', stitched, ...audioArgs,
-          '-vf', subtitleFilter,
-          '-map', '0:v:0', '-map', '1:a:0',
-          '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
-          '-r', '30', output,
-        ])
-      } catch (_subError2) {
-        // Fall back to plain rendering without subtitle filter or faststart
-        await runFfmpeg([
-          '-y', '-i', stitched, ...audioArgs,
-          '-map', '0:v:0', '-map', '1:a:0',
-          '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
-          '-r', '30', output,
-        ])
-      }
-    }
+    await runFfmpeg([
+      '-y', '-i', stitched, '-i', captionVideo, ...audioArgs,
+      '-filter_complex', '[0:v][1:v]overlay=0:0:shortest=1[v]',
+      '-map', '[v]', '-map', '2:a:0',
+      '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
+      '-r', '30', '-movflags', '+faststart', output,
+    ])
     const thumbnail = join(mediaDir, `${video.id}-poster.jpg`)
     const contactSheet = join(mediaDir, `${video.id}-contact.jpg`)
     await runFfmpeg(['-y', '-ss', String(manifest.posterFrameSec), '-i', output, '-frames:v', '1', thumbnail])
@@ -728,18 +759,15 @@ export async function renderVideo(
     } catch (_contactErr) {
       // Optional contact sheet thumbnail tile
     }
-    return { finalVideoUrl: `/media/${basename(output)}`, thumbnailUrl: `/media/${basename(thumbnail)}`, provider: 'manifest-ffmpeg' }
-  } catch (error) {
-    console.warn('[RENDER FALLBACK] FFmpeg rendering unavailable or failed:', error instanceof Error ? error.message : error)
     return {
-      finalVideoUrl: 'https://cdn.coverr.co/videos/coverr-woman-working-on-a-laptop-1576/1080p.mp4',
-      thumbnailUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=500&q=80',
-      provider: 'fallback-cloud-stream'
+      finalVideoUrl: `/media/${basename(output)}`,
+      thumbnailUrl: `/media/${basename(thumbnail)}`,
+      provider: 'manifest-ffmpeg',
+      renderManifest: { ...manifest, contactSheetUrl: existsSync(contactSheet) ? `/media/${basename(contactSheet)}` : undefined },
     }
-  }
 }
 
-function buildRenderManifest(script: Script, existing: RenderManifest | undefined, duration: number): RenderManifest {
+function buildRenderManifest(script: Script, existing: RenderManifest | undefined, duration: number, usesSyntheticVisuals: boolean, hasVideoPlan: boolean): RenderManifest {
   const words = script.text.replace(/\s+/g, ' ').trim().split(' ')
   const captions: CaptionCue[] = []
   const wordsPerCue = 4
@@ -748,19 +776,28 @@ function buildRenderManifest(script: Script, existing: RenderManifest | undefine
     const endSec = Number((duration * Math.min(index + wordsPerCue, words.length) / words.length).toFixed(2))
     captions.push({ startSec, endSec, text: words.slice(index, index + wordsPerCue).join(' ').toUpperCase() })
   }
+  const sources = existing?.factualSources?.length ? existing.factualSources : script.factualSources?.length ? script.factualSources : script.text.includes('Turritopsis') ? ['https://pubmed.ncbi.nlm.nih.gov/31619459/'] : []
   return {
     captions: existing?.captions?.length ? existing.captions : captions,
     posterFrameSec: existing?.posterFrameSec ?? 0.75,
-    factualSources: existing?.factualSources?.length ? existing.factualSources : script.text.includes('Turritopsis') ? ['https://pubmed.ncbi.nlm.nih.gov/31619459/'] : [],
-    requiresSyntheticDisclosure: existing?.requiresSyntheticDisclosure ?? false,
+    factualSources: sources,
+    requiresSyntheticDisclosure: existing?.requiresSyntheticDisclosure ?? usesSyntheticVisuals,
     contactSheetUrl: existing?.contactSheetUrl,
-    compliance: existing?.compliance?.length ? existing.compliance : ['Original narration', 'Captioned for accessibility', 'Source-backed factual claim', 'Asset provenance recorded'],
+    compliance: existing?.compliance?.length ? existing.compliance : [
+      'Original narration',
+      'Captioned for accessibility',
+      ...(usesSyntheticVisuals
+        ? ['Generated illustrative visuals — not authentic footage']
+        : hasVideoPlan
+          ? ['Asset provenance recorded']
+          : ['Static imagery — no authentic moving footage']),
+      ...(sources.length ? ['Source-backed factual claim'] : []),
+    ],
   }
 }
 
 function toSrt(cues: CaptionCue[]) { return cues.map((cue, index) => `${index + 1}\n${srtTime(cue.startSec)} --> ${srtTime(cue.endSec)}\n${cue.text}\n`).join('\n') }
 function srtTime(seconds: number) { const millis = Math.round(seconds * 1000); const hours = Math.floor(millis / 3_600_000); const minutes = Math.floor((millis % 3_600_000) / 60_000); const secs = Math.floor((millis % 60_000) / 1000); return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')},${String(millis % 1000).padStart(3, '0')}` }
-
 // Scene-specific gradient palettes — makes each fallback frame visually distinct
 const SCENE_PALETTES: Array<{ from: [number, number, number, number]; to: [number, number, number, number]; accent: [number, number, number, number] }> = [
   { from: [8, 12, 48, 255], to: [22, 78, 130, 255], accent: [80, 180, 255, 255] },    // deep ocean
@@ -772,10 +809,10 @@ const SCENE_PALETTES: Array<{ from: [number, number, number, number]; to: [numbe
   { from: [25, 23, 55, 255], to: [231, 142, 112, 255], accent: [255, 255, 255, 255] },  // default warm
 ]
 
-async function stageVisualAsset(asset: VisualAsset, mediaDir: string, videoId: string, index: number, fallbackText: string) {
+async function stageVisualAsset(asset: VisualAsset, mediaDir: string, videoId: string, index: number, fallbackText: string): Promise<{ path: string; synthetic: boolean; reason?: string }> {
   const extension = asset.type === 'video' ? '.mp4' : '.png'
   const target = join(mediaDir, `${videoId}-source-${index}${extension}`)
-  if (!asset.path || asset.type === 'illustration') { await writeLocalFallbackImage(target, asset.role || fallbackText, index); return target }
+  if (!asset.path || asset.type === 'illustration') { await writeLocalFallbackImage(target, asset.role || fallbackText, index); return { path: target, synthetic: true, reason: 'no media path — generated illustration' } }
   if (/^https?:\/\//.test(asset.path)) {
     try {
       const response = await fetch(asset.path)
@@ -791,14 +828,14 @@ async function stageVisualAsset(asset: VisualAsset, mediaDir: string, videoId: s
         if (!isValidImageBuffer(buffer)) throw new Error('Downloaded asset failed image header validation')
       }
       await writeFile(target, buffer)
-      return target
-    } catch (_err) {
+      return { path: target, synthetic: false }
+    } catch (error) {
       await writeLocalFallbackImage(target, fallbackText, index)
-      return target
+      return { path: target, synthetic: true, reason: error instanceof Error ? error.message : 'download failed' }
     }
   }
-  if (!existsSync(asset.path)) { await writeLocalFallbackImage(target, fallbackText, index); return target }
-  return asset.path
+  if (!existsSync(asset.path)) { await writeLocalFallbackImage(target, fallbackText, index); return { path: target, synthetic: true, reason: 'local file missing' } }
+  return { path: asset.path, synthetic: false }
 }
 
 function isValidMp4Buffer(buffer: Buffer): boolean {

@@ -56,6 +56,7 @@ export type Script = {
   titleSuggestion?: string
   descriptionSuggestion?: string
   tagsSuggestion: string[]
+  factualSources?: string[]
   status: ScriptStatus
   judgeScore?: number
   judgeVerdict?: 'approved' | 'rejected'
