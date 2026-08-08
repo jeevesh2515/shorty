@@ -18,7 +18,16 @@ export class ShortsWorkflow {
 
   async discoverAndStore(niche: string) {
     const result = await discoverTopics(niche, this.config)
-    const topics = result.topics.map(item => this.db.createTopic({ id: randomUUID(), ...item, status: 'new', createdAt: nowIso(), updatedAt: nowIso() }))
+    const existingTitles = new Set(this.db.listTopics().map(t => t.title.toLowerCase()))
+    const topics = result.topics.map((item, index) => {
+      let uniqueTitle = item.title
+      if (existingTitles.has(uniqueTitle.toLowerCase())) {
+        const count = Array.from(existingTitles).filter(t => t.startsWith(uniqueTitle.toLowerCase())).length + 1
+        uniqueTitle = `${item.title} #${count}`
+      }
+      existingTitles.add(uniqueTitle.toLowerCase())
+      return this.db.createTopic({ id: randomUUID(), ...item, title: uniqueTitle, status: 'new', createdAt: nowIso(), updatedAt: nowIso() })
+    })
     return { provider: result.provider, topics }
   }
 
