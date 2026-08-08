@@ -94,6 +94,30 @@ export function buildGradientPng({ width, height, gradient, accent, text }: PngO
   return Buffer.concat([pngSignature(), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))])
 }
 
+/** A transparent full-frame caption card for FFmpeg builds without drawtext/subtitles. */
+export function buildCaptionPng({ width, height, text }: Pick<PngOptions, 'width' | 'height' | 'text'>): Buffer {
+  const lines: Buffer[] = []
+  const bandTop = height - 420
+  const bandBottom = height - 288
+  for (let y = 0; y < height; y += 1) {
+    const row = Buffer.alloc(width * 4 + 1)
+    row[0] = 0
+    if (y >= bandTop && y < bandBottom) {
+      for (let x = 42; x < width - 42; x += 1) {
+        const offset = 1 + x * 4
+        row[offset] = 0; row[offset + 1] = 0; row[offset + 2] = 0; row[offset + 3] = 150
+      }
+    }
+    if (text) paintText(row, width, text, y, height - 382, 12, 26)
+    lines.push(row)
+  }
+  const raw = Buffer.concat(lines)
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4)
+  ihdr[8] = 8; ihdr[9] = 6
+  return Buffer.concat([pngSignature(), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))])
+}
+
 function mix(a: number, b: number, t: number) { return Math.round(a + (b - a) * t) }
 function smoothstep(edge0: number, edge1: number, x: number) {
   const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)))
@@ -152,25 +176,24 @@ const GLYPHS: Record<string, number[]> = {
   '&': [0x0c,0x12,0x14,0x08,0x15,0x12,0x0d],
 }
 
-function paintText(row: Buffer, width: number, text: string, y: number) {
-  // Each glyph is 5px wide + 1px gap = 6px stride. Render at scale 6 at y-pitch 7.
+function paintText(row: Buffer, width: number, text: string, y: number, textTop = 36, scale = 6, maxChars = 18) {
+  // Each glyph is 5px wide + 1px gap = 6px stride.
   const textHeight = 7
-  const textTop = 36 // text band starts ~36px down (within current row applies each scanline)
-  if (y < textTop || y >= textTop + textHeight * 6) return
-  const localY = Math.floor((y - textTop) / 6)
-  const upper = text.toUpperCase().slice(0, 18)
-  const totalWidth = upper.length * 6 * 6
+  if (y < textTop || y >= textTop + textHeight * scale) return
+  const localY = Math.floor((y - textTop) / scale)
+  const upper = text.toUpperCase().slice(0, maxChars)
+  const totalWidth = upper.length * 6 * scale
   const startX = Math.max(0, Math.floor((width - totalWidth) / 2))
   for (let i = 0; i < upper.length; i += 1) {
     const glyph = GLYPHS[upper[i]] || GLYPHS[' ']
     for (let rowIndex = 0; rowIndex < 7; rowIndex += 1) {
       const bit = glyph[rowIndex]
       if (rowIndex !== localY) continue
-      const xInGlyph = startX + i * 6 * 6
+    const xInGlyph = startX + i * 6 * scale
       for (let col = 0; col < 5; col += 1) {
         if ((bit >> (4 - col)) & 1) {
-          for (let sx = 0; sx < 6; sx += 1) {
-            const x = xInGlyph + col * 6 + sx
+          for (let sx = 0; sx < scale; sx += 1) {
+            const x = xInGlyph + col * scale + sx
             if (x < 0 || x >= width) continue
             const offset = 1 + x * 4
             row[offset] = 245

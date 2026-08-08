@@ -51,7 +51,10 @@ export class ShortsWorkflow {
       const judge = await judgeScript(topic, result.draft, this.config)
       lastJudge = judge
 
-      if (judge.judgeScore >= minScore) {
+      // Research quality gate: when enabled, an approved-quality script still cannot proceed
+      // without at least one authoritative source URL backing its factual claim.
+      const sourcesMissing = this.config.requireResearch && !result.draft.factualSources?.length
+      if (judge.judgeScore >= minScore && !sourcesMissing) {
         const now = nowIso()
         const script = this.db.createScript({
           id: randomUUID(),
@@ -71,7 +74,8 @@ export class ShortsWorkflow {
         return { script: this.db.getScript(script.id), judge, attempts: attempt, provider: result.provider, estimatedCostUsd: totalCost, approved: true }
       }
 
-      feedbackPrompt = `Attempt #${attempt} scored ${judge.judgeScore}/10. Feedback: ${judge.judgeFeedback}`
+      const sourceNote = sourcesMissing ? ' The draft must include a factualSources array with at least one authoritative http(s) URL (e.g. pubmed/doi/university).' : ''
+      feedbackPrompt = `Attempt #${attempt} scored ${judge.judgeScore}/10. Feedback: ${judge.judgeFeedback}${sourceNote}`
     }
 
     const now = nowIso()
@@ -89,7 +93,6 @@ export class ShortsWorkflow {
     })
     const currentTopic = this.db.getTopic(topicId)
     if (currentTopic?.status === 'new') this.db.updateTopicStatus(topicId, 'selected')
-    this.db.updateTopicStatus(topicId, 'scripted')
     return { script: this.db.getScript(script.id), judge: lastJudge, attempts: maxAttempts, provider: lastProvider, estimatedCostUsd: totalCost, approved: false }
   }
 
@@ -133,6 +136,12 @@ export class ShortsWorkflow {
         const result = await searchVisuals(script.titleSuggestion || script.hook, this.config)
         assets = result.assets
       }
+      // Authentic-footage quality gate: when enabled, a topic that needs real moving footage
+      // must never ship with generated illustration cards instead.
+      if (this.config.requireVideoFootage && !assets.some(asset => asset.type === 'video')) {
+        throw new DomainError('FOOTAGE_REQUIRED', 'Authentic video footage is required, but only images or generated illustrations were found', 422)
+      }
+      const visualsProvider = !assets.length ? 'local-illustrated-fallback' : assets.some(asset => asset.type === 'video') ? 'pexels-video' : assets.some(asset => asset.source === 'pexels') ? 'pexels-images' : 'local-illustrated-fallback'
       // An empty asset list is intentional: the renderer creates a deterministic SVG fallback.
       this.db.updateVideo(videoId, { visualAssets: assets })
       const voice = await generateVoiceover(script.text, this.config, this.config.mediaDir)
@@ -143,8 +152,8 @@ export class ShortsWorkflow {
       const thumbnailConcept = await generateThumbnailConcept(script, this.config, this.config.mediaDir)
       const thumbnailUrl = thumbnailConcept.thumbnailUrl || result.thumbnailUrl
       const status = this.reviewModeActive() ? 'review_required' : 'ready'
-      const ready = this.db.updateVideo(videoId, { status, finalVideoUrl: result.finalVideoUrl, thumbnailUrl })
-      return { video: ready, providers: { visuals: 'configured-or-local', voice: voice.provider, renderer: result.provider, thumbnail: thumbnailConcept.provider } }
+      const ready = this.db.updateVideo(videoId, { status, finalVideoUrl: result.finalVideoUrl, thumbnailUrl, renderManifest: result.renderManifest })
+      return { video: ready, providers: { visuals: visualsProvider, voice: voice.provider, renderer: result.provider, thumbnail: thumbnailConcept.provider } }
     } catch (error) {
       this.db.updateVideo(videoId, { status: 'failed' })
       this.db.audit('job', videoId, 'failed', 'failed', error instanceof Error ? error.message : 'Video production failed')
@@ -172,6 +181,7 @@ export class ShortsWorkflow {
     const scheduledAt = nextLondonTime(this.config.publishHourLondon)
     const approved = this.db.updateUpload(uploadId, { status: 'approved_for_publish', scheduledAt })
     this.db.audit('upload', uploadId, 'approved_for_publish', 'approved_for_publish', 'Approved for the next London publishing slot', { scheduledAt })
+    if (this.youtubeConfigured()) return this.publishUpload(uploadId)
     return approved
   }
 
@@ -207,6 +217,9 @@ export class ShortsWorkflow {
     const generated = await this.generateScript(topic.id)
     const script = generated.script
     if (!script) throw new Error('Script generation returned no script')
+    if (!generated.approved) {
+      throw new DomainError('SCRIPT_REJECTED', generated.judge?.judgeFeedback || 'The script did not meet the quality threshold', 422)
+    }
     const video = await this.createVideo(script.id)
     const produced = await this.produceVideo(video.id)
     const upload = await this.createUpload(video.id, { title: script.titleSuggestion || topic.title, description: script.descriptionSuggestion, tags: script.tagsSuggestion, thumbnailUrl: produced.video?.thumbnailUrl })
@@ -223,11 +236,13 @@ export class ShortsWorkflow {
     this.db.setSetting(key, 'running')
     try {
       const result = await this.runManual({ niche: process.env.DEFAULT_NICHE || 'Productivity' })
-      const upload = result.upload
+      let upload = result.upload
       const autoApprove = this.config.autoApprove || this.db.getSetting('auto_approve') === 'true'
       const autoPublish = this.config.autoPublish || this.db.getSetting('auto_publish') === 'true'
       if (autoApprove && upload.status === 'review_required') {
-        await this.approveForPublish(upload.id)
+        const approved = await this.approveForPublish(upload.id)
+        if (!approved) throw new Error('Approval did not return an upload')
+        upload = approved
       }
       if (autoPublish && (upload.status === 'approved_for_publish' || upload.status === 'scheduled')) {
         await this.publishUpload(upload.id)
@@ -244,6 +259,7 @@ export class ShortsWorkflow {
 
   usageSummary() { return this.usage.summary() }
   private reviewModeActive() { return this.db.listUploads().filter(upload => ['approved_for_publish', 'scheduled', 'published'].includes(upload.status)).length < this.config.reviewLimit }
+  private youtubeConfigured() { const youtube = this.youtubeConfig(); return Boolean(youtube.youtubeClientId && youtube.youtubeClientSecret && youtube.youtubeRefreshToken) }
   private youtubeConfig() { const dbToken = this.db.getSetting('youtube_refresh_token'); return dbToken ? { ...this.config, youtubeRefreshToken: dbToken } : this.config }
 }
 
