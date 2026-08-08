@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 
 vi.setConfig({ testTimeout: 180000, hookTimeout: 180000 })
 import { mkdirSync, readdirSync, statSync } from 'node:fs'
@@ -10,7 +10,7 @@ import { ShortsWorkflow } from '../server/workflow.js'
 
 const tempRoot = resolve(process.cwd(), 'data/workflow-test')
 
-afterEach(() => {
+afterAll(() => {
   if (existsSyncForTests(tempRoot)) rmSync(tempRoot, { recursive: true, force: true })
 })
 
