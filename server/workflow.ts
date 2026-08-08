@@ -238,6 +238,7 @@ export class ShortsWorkflow {
   }
 
   async deleteTopic(topicId: string) { return this.db.deleteTopic(topicId) }
+  async cleanupTopics() { return this.db.cleanupUnscriptedTopics() }
   async deleteVideo(videoId: string) { return this.db.deleteVideo(videoId) }
   async deleteUpload(uploadId: string) { return this.db.deleteUpload(uploadId) }
 
