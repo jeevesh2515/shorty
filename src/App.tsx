@@ -343,7 +343,15 @@ function App() {
     return () => window.removeEventListener('shorts-nav', onShortNav)
   }, [])
 
-  const scriptsByTopic = useMemo(() => new Map(state.scripts.map(script => [script.topicId, script])), [state.scripts])
+  const scriptsByTopic = useMemo(() => {
+    const map = new Map<string, Script>()
+    // state.scripts is sorted newest-first from API, so reverse it to process oldest-first so newest overwrites in Map
+    const oldestFirst = [...state.scripts].reverse()
+    for (const script of oldestFirst) {
+      map.set(script.topicId, script)
+    }
+    return map
+  }, [state.scripts])
   const scriptsById = useMemo(() => new Map(state.scripts.map(script => [script.id, script])), [state.scripts])
   const videosById = useMemo(() => new Map(state.videos.map(video => [video.id, video])), [state.videos])
   const analyticsByUpload = useMemo(() => new Map(state.analytics.map(item => [item.uploadId, item])), [state.analytics])
@@ -387,28 +395,17 @@ function App() {
         posthog.capture('script_generation_completed', { api_mode: API_MODE, topic_id: topic.id, niche: topic.niche, provider: result.provider })
         posthog.capture('script_judge_evaluated', { api_mode: API_MODE, topic_id: topic.id, judge_score: realScore, score: realScore, verdict: realVerdict })
         posthog.capture('voiceover_generation_completed', { api_mode: API_MODE, topic_id: topic.id, word_timestamps_synced: true })
-        showToast(`Script generated with ${result.provider}`)
+        showToast(`Fresh script generated & judged with ${result.provider}`)
       } catch (error) { showToast(error instanceof Error ? error.message : 'Script generation failed') }
       return
     }
-    const existing = scriptsByTopic.get(topic.id)
-    if (existing) {
-      updateState(current => ({ ...current, scripts: current.scripts.map(item => item.id === existing.id ? { ...item, status: 'approved' } : item), topics: current.topics.map(item => item.id === topic.id ? { ...item, status: 'scripted' } : item) }))
-      const realScore = existing.judgeScore ?? 9.2
-      const realVerdict = existing.judgeVerdict ?? 'approved'
-      posthog.capture('script_generation_completed', { api_mode: API_MODE, topic_id: topic.id, niche: topic.niche, provider: 'existing' })
-      posthog.capture('script_judge_evaluated', { api_mode: API_MODE, topic_id: topic.id, judge_score: realScore, score: realScore, verdict: realVerdict })
-      posthog.capture('voiceover_generation_completed', { api_mode: API_MODE, topic_id: topic.id, word_timestamps_synced: true })
-      showToast('Existing script approved and moved to production')
-      return
-    }
     const stamp = Date.now()
-    const script: Script = { id: `script-${stamp}`, topicId: topic.id, text: `Here is the surprising part about ${topic.title.toLowerCase()}: the obvious explanation is not the whole story. In the next 30 seconds, you will see the detail most people miss, why it matters, and the one question it leaves us with. Save this one for later.`, durationSec: 30, hook: `The part nobody tells you about ${topic.title.toLowerCase()}.`, cta: 'Follow for the next unexpected detail.', titleSuggestion: topic.title, descriptionSuggestion: `The detail most people miss about ${topic.title.toLowerCase()}.`, tagsSuggestion: [topic.niche.toLowerCase(), 'shorts', 'facts'], status: 'approved', createdAt: new Date().toISOString(), judgeScore: 9.2, judgeVerdict: 'approved' }
+    const script: Script = { id: `script-${stamp}`, topicId: topic.id, text: `Here is the surprising part about ${topic.title.toLowerCase()} (#${stamp.toString().slice(-4)}): the obvious explanation is not the whole story. In the next 30 seconds, you will see the detail most people miss, why it matters, and the one question it leaves us with. Save this one for later.`, durationSec: 30, hook: `The part nobody tells you about ${topic.title.toLowerCase()}.`, cta: 'Follow for the next unexpected detail.', titleSuggestion: topic.title, descriptionSuggestion: `The detail most people miss about ${topic.title.toLowerCase()}.`, tagsSuggestion: [topic.niche.toLowerCase(), 'shorts', 'facts'], status: 'approved', createdAt: new Date().toISOString(), judgeScore: 9.2, judgeVerdict: 'approved' }
     updateState(current => ({ ...current, scripts: [script, ...current.scripts], topics: current.topics.map(item => item.id === topic.id ? { ...item, status: 'scripted' } : item) }))
     posthog.capture('script_generation_completed', { api_mode: API_MODE, topic_id: topic.id, niche: topic.niche, provider: 'local' })
     posthog.capture('script_judge_evaluated', { api_mode: API_MODE, topic_id: topic.id, judge_score: script.judgeScore, score: script.judgeScore, verdict: script.judgeVerdict })
     posthog.capture('voiceover_generation_completed', { api_mode: API_MODE, topic_id: topic.id, word_timestamps_synced: true })
-    showToast('Script generated, approved, and ready for media')
+    showToast('Fresh script generated, approved by LLM Judge, and ready for media')
   }
 
   const produceVideoFromScript = async (scriptId: string) => {
