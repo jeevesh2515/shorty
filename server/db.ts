@@ -148,9 +148,16 @@ export class ShortsDatabase {
     const scripts = this.listScripts().filter(s => s.topicId === id)
     for (const script of scripts) this.deleteScript(script.id)
     this.db.prepare('DELETE FROM topics WHERE id = ?').run(id)
-    this.audit('topic', id, 'deleted', undefined, 'Topic deleted')
-    return { deleted: true }
+    this.audit('topic', id, 'deleted', 'deleted', `Topic ${id} was deleted`)
+    return { id, deleted: true }
   }
+
+  cleanupUnscriptedTopics() {
+    const unscripted = this.listTopics().filter(t => t.status === 'new')
+    unscripted.forEach(t => this.deleteTopic(t.id))
+    return { cleanedCount: unscripted.length }
+  }
+
   deleteScript(id: string) {
     const videos = this.listVideos().filter(v => v.scriptId === id)
     for (const video of videos) this.deleteVideo(video.id)

@@ -50,6 +50,7 @@ export function createHttpServer(db: ShortsDatabase, workflow: ShortsWorkflow, c
       if (req.method === 'GET' && url.pathname === '/api/topics') { ok(res, db.listTopics()); return }
       if (req.method === 'POST' && url.pathname === '/api/topics') { const body = await readBody(req, config.maxBodyBytes); ok(res, await workflow.createTopic({ title: String(body.title || ''), niche: String(body.niche || ''), source: body.source as 'trending' | 'evergreen' | 'manual' | undefined, rationale: body.rationale ? String(body.rationale) : undefined, metrics: (body.metrics as Record<string, unknown>) || {} }), 201); return }
       if (req.method === 'POST' && url.pathname === '/api/topics/discover') { const body = await readBody(req, config.maxBodyBytes); ok(res, await workflow.discoverAndStore(String(body.niche || 'Productivity')), 201); return }
+      if (req.method === 'POST' && url.pathname === '/api/topics/cleanup') { ok(res, await workflow.cleanupTopics()); return }
       const topicMatch = url.pathname.match(/^\/api\/topics\/([^/]+)$/)
       if (req.method === 'DELETE' && topicMatch) { ok(res, await workflow.deleteTopic(topicMatch[1])); return }
       const topicStatus = url.pathname.match(/^\/api\/topics\/([^/]+)\/status$/)
