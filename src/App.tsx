@@ -769,7 +769,7 @@ function TopicDetail({ topic, script, onGenerate, onProduceVideo, onReject, onDe
           <div className="script-preview">
             <strong>{script.hook}</strong>
             <p>{script.text}</p>
-            <div className="script-footer"><span><Icon name="clock" size={14} /> {script.durationSec}s</span><span>{script.tagsSuggestion.slice(0, 2).map(tag => `#${tag}`).join(' ')}</span></div>
+            <div className="script-footer"><span><Icon name="clock" size={14} /> {script.durationSec}s</span><span>{(Array.isArray(script.tagsSuggestion) ? script.tagsSuggestion : typeof script.tagsSuggestion === 'string' ? (script.tagsSuggestion as string).split(/\s+/).map(t => t.replace(/^#/, '')).filter(Boolean) : []).slice(0, 2).map(tag => `#${tag}`).join(' ')}</span></div>
           </div>
         ) : (
           <EmptyState title="No script attached" description="Generate a script to run the AI Judge and move into production." />

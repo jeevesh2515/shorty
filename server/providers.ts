@@ -93,7 +93,10 @@ async function openAiCompatibleScript(
   if (!content) throw new Error('LLM returned empty content')
 
   const cleaned = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
-  return { ...localScript(topic), ...JSON.parse(cleaned), status: 'draft' }
+  const parsed = JSON.parse(cleaned)
+  const rawTags = parsed.tagsSuggestion
+  const tagsSuggestion = Array.isArray(rawTags) ? rawTags.map((t: unknown) => String(t).replace(/^#/, '').trim()).filter(Boolean) : typeof rawTags === 'string' ? (rawTags as string).split(/\s+/).map((t: string) => t.replace(/^#/, '').trim()).filter(Boolean) : [topic.niche.toLowerCase(), 'shorts', 'facts']
+  return { ...localScript(topic), ...parsed, tagsSuggestion, status: 'draft' }
 }
 
 async function openAiCompatibleJudge(
