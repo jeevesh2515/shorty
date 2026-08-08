@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 
-export type LlmProvider = 'openai' | 'gemini' | 'groq' | 'openrouter' | 'nvidia' | 'local'
+export type LlmProvider = 'openai' | 'gemini' | 'groq' | 'openrouter' | 'nvidia' | 'ollama' | 'local'
 
 export type ServerConfig = {
   port: number
@@ -24,6 +24,8 @@ export type ServerConfig = {
   openrouterModel: string
   nvidiaApiKey?: string
   nvidiaModel: string
+  ollamaBaseUrl: string
+  ollamaModel: string
 
   // YouTube
   youtubeApiKey?: string
@@ -50,7 +52,7 @@ export type ServerConfig = {
   autoPublish: boolean
 }
 
-const VALID_PROVIDERS: LlmProvider[] = ['openai', 'gemini', 'groq', 'openrouter', 'nvidia', 'local']
+const VALID_PROVIDERS: LlmProvider[] = ['openai', 'gemini', 'groq', 'openrouter', 'nvidia', 'ollama', 'local']
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const raw = String(env.LLM_PROVIDER || 'local')
@@ -81,6 +83,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     openrouterModel: env.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free',
     nvidiaApiKey: env.NVIDIA_API_KEY,
     nvidiaModel: env.NVIDIA_MODEL || 'meta/llama-3.1-70b-instruct',
+    ollamaBaseUrl: env.OLLAMA_BASE_URL || 'http://localhost:11434',
+    ollamaModel: env.OLLAMA_MODEL || 'llama3.1',
 
     youtubeApiKey: env.YOUTUBE_API_KEY,
     youtubeClientId: env.YOUTUBE_CLIENT_ID,
@@ -110,7 +114,8 @@ export function providerReadiness(config: ServerConfig) {
     (config.llmProvider === 'gemini' && Boolean(config.geminiApiKey)) ||
     (config.llmProvider === 'groq' && Boolean(config.groqApiKey)) ||
     (config.llmProvider === 'openrouter' && Boolean(config.openrouterApiKey)) ||
-    (config.llmProvider === 'nvidia' && Boolean(config.nvidiaApiKey))
+    (config.llmProvider === 'nvidia' && Boolean(config.nvidiaApiKey)) ||
+    (config.llmProvider === 'ollama')
 
   return {
     llm: llmReady,
@@ -118,6 +123,7 @@ export function providerReadiness(config: ServerConfig) {
     groq: Boolean(config.groqApiKey),
     openrouter: Boolean(config.openrouterApiKey),
     nvidia: Boolean(config.nvidiaApiKey),
+    ollama: Boolean(config.ollamaBaseUrl),
     youtube: Boolean(config.youtubeClientId && config.youtubeClientSecret && config.youtubeRefreshToken),
     youtubeSearch: Boolean(config.youtubeApiKey),
     dograh: Boolean(config.dograhApiUrl || config.speachesApiUrl),
