@@ -667,12 +667,13 @@ export async function renderVideo(
     for (const [index, asset] of assets.entries()) {
       const source = await stageVisualAsset(asset, mediaDir, video.id, index, script.titleSuggestion || script.hook)
       const scene = join(mediaDir, `${video.id}-scene-${index}.mp4`)
+      const sceneFrames = Math.round(sceneDuration * 30)
       const filter = asset.type === 'video'
         ? 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,eq=contrast=1.06:saturation=1.08,format=yuv420p'
-        : "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(zoom+0.00065,1.16)':d=1:s=1080x1920:fps=30,eq=contrast=1.06:saturation=1.08,format=yuv420p"
+        : `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(zoom+0.00065,1.16)':d=${sceneFrames}:s=1080x1920:fps=30,eq=contrast=1.06:saturation=1.08,format=yuv420p`
       const args = asset.type === 'video'
-        ? ['-y', '-stream_loop', '-1', '-i', source, '-t', String(sceneDuration), '-an', '-vf', filter, '-r', '30', '-movflags', '+faststart', scene]
-        : ['-y', '-loop', '1', '-i', source, '-t', String(sceneDuration), '-an', '-vf', filter, '-r', '30', '-movflags', '+faststart', scene]
+        ? ['-y', '-stream_loop', '-1', '-i', source, '-t', String(sceneDuration), '-an', '-vf', filter, '-r', '30', scene]
+        : ['-y', '-loop', '1', '-i', source, '-t', String(sceneDuration), '-an', '-vf', filter, '-r', '30', scene]
       await runFfmpeg(args)
       scenePaths.push(scene)
     }
@@ -700,18 +701,33 @@ export async function renderVideo(
         '-r', '30', '-movflags', '+faststart', output,
       ])
     } catch (_subError) {
-      // If local FFmpeg lacks libass/subtitles filter support, render without subtitle filter
-      await runFfmpeg([
-        '-y', '-i', stitched, ...audioArgs,
-        '-map', '0:v:0', '-map', '1:a:0',
-        '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
-        '-r', '30', '-movflags', '+faststart', output,
-      ])
+      try {
+        // Retry with subtitles but without faststart if atom shifting failed
+        await runFfmpeg([
+          '-y', '-i', stitched, ...audioArgs,
+          '-vf', subtitleFilter,
+          '-map', '0:v:0', '-map', '1:a:0',
+          '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
+          '-r', '30', output,
+        ])
+      } catch (_subError2) {
+        // Fall back to plain rendering without subtitle filter or faststart
+        await runFfmpeg([
+          '-y', '-i', stitched, ...audioArgs,
+          '-map', '0:v:0', '-map', '1:a:0',
+          '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
+          '-r', '30', output,
+        ])
+      }
     }
     const thumbnail = join(mediaDir, `${video.id}-poster.jpg`)
     const contactSheet = join(mediaDir, `${video.id}-contact.jpg`)
     await runFfmpeg(['-y', '-ss', String(manifest.posterFrameSec), '-i', output, '-frames:v', '1', thumbnail])
-    await runFfmpeg(['-y', '-i', output, '-vf', 'fps=1/6,scale=270:480,tile=3x2', '-frames:v', '1', contactSheet])
+    try {
+      await runFfmpeg(['-y', '-i', output, '-vf', 'fps=1/6,scale=270:480,tile=3x2', '-frames:v', '1', contactSheet])
+    } catch (_contactErr) {
+      // Optional contact sheet thumbnail tile
+    }
     return { finalVideoUrl: `/media/${basename(output)}`, thumbnailUrl: `/media/${basename(thumbnail)}`, provider: 'manifest-ffmpeg' }
   } catch (error) {
     console.warn('[RENDER FALLBACK] FFmpeg rendering unavailable or failed:', error instanceof Error ? error.message : error)
