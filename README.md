@@ -192,12 +192,15 @@ disclosed rather than passed off as footage.
 
 ## Where this lives in the project
 
+- `HANDOFF.md` — current state, live services, and what to do next. **Start here.**
 - `01_PRD.md` — original product contract.
 - `20_RULES.md` — invariants the codebase enforces.
 - `30_ARCHITECTURE.md` — pipeline and entity design.
 - `40_DESIGN.md` — operator UX expectations.
-- `50_PHASES.md` — phased rollout plan.
-- `MEGA_PROMPT.md` — initial entity/page acceptance brief.
-- `REQUIRED_SECRETS.md` — the only matrix of required keys.
-- `PHASES_IMPLEMENTATION.md` — phase-by-phase status snapshot.
-- `PHASE_1_DONE.md` … `PHASE_7_DONE.md` — verification-backed notes per phase.
+- `RAILWAY_DEPLOYMENT.md` — deployment runbook.
+- `docs/VISUAL_SOURCES.md` — stock provider behaviour and licence validation.
+- `docs/POSTHOG_WORKFLOW.md` — analytics instrumentation.
+
+`MEGA_PROMPT.md`, `REQUIRED_SECRETS.md` and `10_MEMORY.md` appear in `.gitignore` and are
+intentionally absent from the repository — earlier revisions of this list linked to them
+anyway.

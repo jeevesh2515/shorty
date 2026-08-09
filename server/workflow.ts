@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ServerConfig } from './config.js'
 import { ShortsDatabase, stableIdempotencyKey } from './db.js'
 import { DomainError, areTopicsSimilar, nowIso } from './domain.js'
+import type { Upload, VisualAsset } from './domain.js'
 import { UsageLedger } from './usage.js'
 import { discoverTopics, generateScript, generateThumbnailConcept, generateVoiceover, judgeScript, renderVideo, searchVisuals, uploadToYouTube, fetchYouTubeAnalytics } from './providers.js'
 
@@ -259,34 +261,97 @@ export class ShortsWorkflow {
     }
     const video = await this.createVideo(script.id)
     const produced = await this.produceVideo(video.id)
-    const upload = await this.createUpload(video.id, { title: script.titleSuggestion || topic.title, description: script.descriptionSuggestion, tags: script.tagsSuggestion, thumbnailUrl: produced.video?.thumbnailUrl })
+    const created = await this.createUpload(video.id, { title: script.titleSuggestion || topic.title, description: script.descriptionSuggestion, tags: script.tagsSuggestion, thumbnailUrl: produced.video?.thumbnailUrl })
+    const upload = await this.finishUpload(created)
     return { topic, script, video: produced.video, upload, providers: generated.provider }
   }
 
-  async runScheduled() {
+  /**
+   * The daily unattended run.
+   *
+   * `force` exists because the London-hour gate cannot survive an external cron. GitHub
+   * Actions schedules are UTC-only and routinely run late, so a fixed UTC time drifts out
+   * of the one-hour window whenever the clocks change — and any delayed run misses it
+   * entirely. With `force`, the caller owns the schedule and the per-day key below still
+   * guarantees at most one publish per day.
+   */
+  async runScheduled(options: { force?: boolean } = {}) {
     if (this.config.automationPaused || this.db.getSetting('automation_paused') === 'true') return { skipped: true, reason: 'automation_paused' }
     const london = londonParts(new Date())
     const day = `${london.year}-${String(london.month).padStart(2, '0')}-${String(london.day).padStart(2, '0')}`
     const key = `scheduled:${day}`
     if (this.db.getSetting(key) === 'complete') return { skipped: true, reason: 'already_completed', day }
-    if (london.hour !== this.config.reviewHourLondon) return { skipped: true, reason: 'outside_review_window', hour: london.hour }
+    if (!options.force && london.hour !== this.config.reviewHourLondon) return { skipped: true, reason: 'outside_review_window', hour: london.hour }
     this.db.setSetting(key, 'running')
     try {
-      const result = await this.runManual({ niche: process.env.DEFAULT_NICHE || 'Productivity' })
-      let upload = result.upload
-      const autoApprove = this.config.autoApprove || this.db.getSetting('auto_approve') === 'true'
-      const autoPublish = this.config.autoPublish || this.db.getSetting('auto_publish') === 'true'
-      if (autoApprove && upload.status === 'review_required') {
-        const approved = await this.approveForPublish(upload.id)
-        if (!approved) throw new Error('Approval did not return an upload')
-        upload = approved
-      }
-      if (autoPublish && (upload.status === 'approved_for_publish' || upload.status === 'scheduled')) {
-        await this.publishUpload(upload.id)
-      }
+      // runManual already applies auto-approve and auto-publish via finishUpload().
+      const result = await this.runManual({ niche: pickNiche(this.config.defaultNiche) })
       this.db.setSetting(key, 'complete')
       return result
     } catch (error) { this.db.setSetting(key, 'failed'); throw error }
+  }
+
+  /**
+   * Attach externally-produced visual assets to a video.
+   *
+   * produceVideo() already prefers `video.visualAssets` when non-empty and only falls back
+   * to stock search when it is empty — there was simply no way to set them. This lets
+   * bespoke footage (Veo, Higgsfield, anything else) render through the same pipeline,
+   * with the same captions and the same upload path, instead of a parallel one.
+   */
+  async setVisualAssets(videoId: string, assets: VisualAsset[]) {
+    const video = this.db.getVideo(videoId)
+    if (!video) throw new DomainError('NOT_FOUND', `Video ${videoId} was not found`, 404)
+    if (!assets.length) throw new DomainError('INVALID_INPUT', 'At least one visual asset is required', 400)
+    for (const asset of assets) {
+      if (!/^https:\/\//i.test(asset.path)) {
+        throw new DomainError('INVALID_INPUT', `Asset paths must be https URLs: ${asset.path}`, 400)
+      }
+    }
+    this.db.updateVideo(videoId, { visualAssets: assets })
+    this.db.audit('video', videoId, 'visuals_attached', 'attached', 'Externally supplied visual assets attached', {
+      count: assets.length,
+      sources: assets.map(asset => asset.source),
+    })
+    return this.db.getVideo(videoId)
+  }
+
+  /**
+   * Ingest a finished MP4 rendered outside the container.
+   *
+   * The filename is derived from the video id, never from the request, so a caller cannot
+   * choose a write path. Size and content type are both checked before anything is written.
+   */
+  async attachRenderedMedia(videoId: string, sourceUrl: string, maxBytes = 300 * 1024 * 1024) {
+    const video = this.db.getVideo(videoId)
+    if (!video) throw new DomainError('NOT_FOUND', `Video ${videoId} was not found`, 404)
+    if (!/^https:\/\//i.test(sourceUrl)) throw new DomainError('INVALID_INPUT', 'sourceUrl must be an https URL', 400)
+
+    const response = await fetch(sourceUrl)
+    if (!response.ok) throw new DomainError('FETCH_FAILED', `Could not fetch media (${response.status})`, 502)
+
+    const declaredLength = Number(response.headers.get('content-length') || 0)
+    if (declaredLength && declaredLength > maxBytes) {
+      throw new DomainError('MEDIA_TOO_LARGE', `Media is ${declaredLength} bytes, limit is ${maxBytes}`, 413)
+    }
+    const buffer = Buffer.from(await response.arrayBuffer())
+    if (buffer.length > maxBytes) throw new DomainError('MEDIA_TOO_LARGE', `Media exceeds ${maxBytes} bytes`, 413)
+    // ftyp box at offset 4 — cheap structural check that this is really an MP4.
+    if (buffer.length < 12 || buffer.subarray(4, 8).toString('ascii') !== 'ftyp') {
+      throw new DomainError('INVALID_MEDIA', 'Fetched file is not a valid MP4', 415)
+    }
+
+    mkdirSync(this.config.mediaDir, { recursive: true })
+    const fileName = `${videoId}-final.mp4`
+    await writeFile(join(this.config.mediaDir, fileName), buffer)
+
+    const status = this.reviewModeActive() ? 'review_required' : 'ready'
+    const updated = this.db.updateVideo(videoId, { status, finalVideoUrl: `/media/${fileName}` })
+    this.db.audit('video', videoId, 'media_attached', status, 'Externally rendered media attached', {
+      bytes: buffer.length,
+      sourceUrl,
+    })
+    return updated
   }
 
   async deleteTopic(topicId: string) { return this.db.deleteTopic(topicId) }
@@ -295,9 +360,60 @@ export class ShortsWorkflow {
   async deleteUpload(uploadId: string) { return this.db.deleteUpload(uploadId) }
 
   usageSummary() { return this.usage.summary() }
-  private reviewModeActive() { return this.db.listUploads().filter(upload => ['approved_for_publish', 'scheduled', 'published'].includes(upload.status)).length < this.config.reviewLimit }
+
+  autoApproveEnabled() { return this.config.autoApprove || this.db.getSetting('auto_approve') === 'true' }
+  autoPublishEnabled() { return this.config.autoPublish || this.db.getSetting('auto_publish') === 'true' }
+
+  /**
+   * Whether new videos and uploads should land in `review_required`.
+   *
+   * The count-based rule on its own is why AUTO_APPROVE appeared to do nothing: until
+   * `reviewLimit` (default 10) uploads reached an approved/published state, every new item
+   * was forced into review — and nothing could reach that state without being approved
+   * first. A deadlock. An explicit auto-approve now short-circuits it.
+   */
+  private reviewModeActive() {
+    if (this.autoApproveEnabled()) return false
+    return this.db.listUploads().filter(upload => ['approved_for_publish', 'scheduled', 'published'].includes(upload.status)).length < this.config.reviewLimit
+  }
+
+  /**
+   * Apply auto-approve / auto-publish to a freshly created upload.
+   *
+   * Shared by every trigger route. This logic used to live only inside runScheduled(), so
+   * a run started via /api/runs/manual left its upload in review forever — exactly what an
+   * external cron hitting that route would have produced.
+   */
+  private async finishUpload(upload: Upload): Promise<Upload> {
+    let current = upload
+    if (this.autoApproveEnabled() && current.status === 'review_required') {
+      const approved = await this.approveForPublish(current.id)
+      if (!approved) throw new Error('Approval did not return an upload')
+      current = approved
+    }
+    if (this.autoPublishEnabled() && (current.status === 'approved_for_publish' || current.status === 'scheduled')) {
+      const published = await this.publishUpload(current.id)
+      if (published) current = published
+    }
+    return current
+  }
   private youtubeConfigured() { const youtube = this.youtubeConfig(); return Boolean(youtube.youtubeClientId && youtube.youtubeClientSecret && youtube.youtubeRefreshToken) }
   private youtubeConfig() { const dbToken = this.db.getSetting('youtube_refresh_token'); return dbToken ? { ...this.config, youtubeRefreshToken: dbToken } : this.config }
+}
+
+/**
+ * Resolve the niche for today's run.
+ *
+ * `DEFAULT_NICHE` accepts a comma-separated list and rotates through it by day. Publishing
+ * the same niche in the same format every single day is the pattern YouTube's
+ * inauthentic-content policy singles out — rotation is cheap insurance against a channel
+ * that "feels interchangeable from video to video".
+ */
+export function pickNiche(spec: string, date = new Date()): string {
+  const niches = spec.split(',').map(value => value.trim()).filter(Boolean)
+  if (niches.length <= 1) return niches[0] || 'Productivity'
+  const dayNumber = Math.floor(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) / 86_400_000)
+  return niches[dayNumber % niches.length]
 }
 
 function londonParts(date: Date) {

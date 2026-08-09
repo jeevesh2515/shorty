@@ -12,6 +12,11 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
+# Strip dev dependencies while keeping the already-compiled better-sqlite3 native binding.
+# The production stage copies this tree wholesale, so it never needs a C++ toolchain of
+# its own — that removes python3/make/g++ (~250MB) from the runtime image.
+RUN npm prune --omit=dev
+
 # ── Stage 2: Production ──────────────────────────────────────
 FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -23,16 +28,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # fallback face when the Anton download below is unavailable.
     fontconfig \
     fonts-dejavu-core \
-    python3 \
-    make \
-    g++ \
-    sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --omit=dev
 
+# Pruned, already-built dependencies from the build stage. Rebuilding them here would drag
+# python3/make/g++ back into the runtime image for no benefit — both stages share the same
+# node:22-bookworm-slim base, so the compiled native bindings are ABI-compatible.
+COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/dist-server ./dist-server
 
