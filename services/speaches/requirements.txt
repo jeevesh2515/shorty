@@ -1,5 +1,8 @@
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
-edge-tts>=6.1.9
+# >=7.0.0 required: the boundary="WordBoundary" argument that yields per-word caption
+# timings does not exist before 7.x (and 7.x defaults to SentenceBoundary, which emits
+# no word events at all -- see synthesize() in main.py).
+edge-tts>=7.0.0
 pydantic==2.7.0
 httpx>=0.27.0
