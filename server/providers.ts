@@ -987,3 +987,4 @@ export async function generateThumbnailConcept(
     return { provider: 'local-fallback' }
   }
 }
+# force rebuild
