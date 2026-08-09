@@ -10,7 +10,7 @@ mkdirSync(config.mediaDir, { recursive: true })
 const db = new ShortsDatabase({ filename: config.dbPath, seed: process.env.SEED_DEMO === 'true' })
 const workflow = new ShortsWorkflow(db, config)
 const server = createHttpServer(db, workflow, config)
-server.listen(config.port, () => console.log(`Shorts Autopilot API listening on http://localhost:${config.port}`))
+server.listen(config.port, () => console.log(`KILO_DEPLOY listening on http://localhost:${config.port}`))
 
 let schedulerTimer: NodeJS.Timeout | undefined
 if (process.env.ENABLE_SCHEDULER === 'true') {
