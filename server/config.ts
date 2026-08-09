@@ -58,6 +58,8 @@ export type ServerConfig = {
   autoApprove: boolean
   autoPublish: boolean
   allowSilentAudio: boolean
+  /** A comma-separated list is supported and rotated per day — see pickNiche(). */
+  defaultNiche: string
 }
 
 const VALID_PROVIDERS: LlmProvider[] = ['openai', 'gemini', 'groq', 'openrouter', 'nvidia', 'ollama', 'local']
@@ -123,6 +125,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     autoApprove: env.AUTO_APPROVE === 'true',
     autoPublish: env.AUTO_PUBLISH === 'true',
     allowSilentAudio: env.ALLOW_SILENT_AUDIO === 'true',
+    defaultNiche: env.DEFAULT_NICHE || 'Productivity',
   }
 }
 
