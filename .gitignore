@@ -39,3 +39,11 @@ yarn-error.log*
 graphify-out/
 .vercel
 
+
+# Python bytecode (speaches service)
+__pycache__/
+*.pyc
+
+# Caption fonts are fetched at Docker build time (see assets/fonts/README.md)
+assets/fonts/*.ttf
+assets/fonts/OFL.txt
