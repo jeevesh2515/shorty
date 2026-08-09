@@ -1,3 +1,4 @@
+import 'dotenv/config'
 import { mkdirSync } from 'node:fs'
 import { loadConfig } from './config.js'
 import { ShortsDatabase } from './db.js'

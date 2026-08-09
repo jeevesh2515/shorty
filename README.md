@@ -17,7 +17,7 @@ Speaches/Dograh, Groq, YouTube OAuth).
 |---|---|---|---|
 | Script generation | Groq (Llama 70B) | **Free** | `GROQ_API_KEY` |
 | Topic discovery | YouTube Data API v3 | Free (10k req/day) | `YOUTUBE_API_KEY` |
-| Visual assets | Pexels | Free (200 req/hr) | `PEXELS_API_KEY` |
+| Visual assets | Pexels + Pixabay + Mixkit | Free tiers | `PEXELS_API_KEY`, `PIXABAY_API_KEY`, `MIXKIT_FALLBACK` |
 | Voiceover | Self-hosted Speaches (Docker) | **Free** | `SPEACHES_API_URL` |
 | Video render | FFmpeg (local/Docker) | **Free** | — |
 | Publishing | YouTube OAuth | Free | 3 OAuth keys |
@@ -64,12 +64,16 @@ self-hosting TTS costs electricity).
   - `nvidia` — **FREE** credits Llama 70B via NVIDIA NIM.
   - `gemini` — low-cost Gemini Flash (~$0.002/script).
   - `openai` — GPT-4o-mini (~$0.01/script).
-- YouTube Data API v3, Pexels, Speaches/Dograh TTS adapters.
+- YouTube Data API v3, Pexels/Pixabay/Mixkit adapters with licence verification
+  and provenance caching (`data/assets/`).
 - YouTube OAuth upload with scheduled publish support — connect from
   the Settings page, no manual token setup required.
 - Optional daily scheduler hook with **auto-approve** and **auto-publish**
   toggles for fully autonomous operation.
 - AI-generated thumbnail concepts via free Pollinations.ai image API.
+- `npm run acquire:jellyfish` hunts real stock footage for the seeded
+  LoidLoveScience Jellyfish Short and labels unverified life-cycle stages
+  as "Illustrated life cycle".
 - Docker deployment with FFmpeg preinstalled.
 - Vitest repository/provider/API/workflow tests.
 - Vercel (frontend) + Railway (backend) deployment configs.
@@ -173,8 +177,8 @@ uses same-origin relative API paths.
 
 ```bash
 npm run build           # TypeScript + Vite + server bundle
-npm test                # 5 fast unit tests (db, http, providers) ~1 s
-npm run test:full       # 14 tests including 3 real FFmpeg renders (~2 min)
+npm test                # unit tests
+npm run test:full       # full suite including real FFmpeg renders
 npm run api:smoke       # HTTP smoke against in-memory server
 npm run pipeline:smoke  # In-process FFmpeg pipeline including audit + render
 npm run docker:validate # Composes the docker-compose surface expectations

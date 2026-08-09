@@ -31,13 +31,21 @@ Upgraded Shorts Autopilot for the **LoidLoveScience** science channel with a hig
 
 ## 2. Technical Enhancements
 
+### Multi-Source Visual Stack (`server/visual-sources.ts`)
+- **Primary:** Pexels API — free commercial + YouTube use permitted.
+- **Fallback:** Pixabay API — Pixabay Content License.
+- **Manual fallback:** Mixkit HTML scrape — accepted only when item page confirms Free License.
+- **Provenance cache:** Search results cached in `data/assets/` for 7 days with creator credit, licence label, and source page URL.
+- **Jellyfish acquisition script:** `npm run acquire:jellyfish` hunts real footage, downloads clips into `data/media/jellyfish-library/`, and seeds the DB with a 6-scene video that labels unverified Turritopsis life-cycle stages as "Illustrated life cycle".
+
 ### Renderer Resiliency (`server/providers.ts`)
 - **Scene Palettes:** Implemented 6 distinct color gradients for fallback scene frames so that local-fallback videos have rich visual rhythm without external image dependencies.
 - **FFmpeg Filter Protection:** Added automatic fallback if local FFmpeg lacks `libass`/`subtitles` filter support. Video rendering will complete cleanly on all platforms.
+- **Absolute path safety:** Config paths (`MEDIA_DIR`, `SHORTS_DB_PATH`, `STATIC_DIR`) are resolved to absolute paths to prevent FFmpeg concat path duplication.
 
-### Seed Script (`scripts/seed-jellyfish.ts`)
-- Executable via `npm run seed:jellyfish`.
-- Automatically populates Topic, Script, and Video entities into SQLite with full render manifest.
+### Seed Scripts
+- `npm run seed:jellyfish` — deterministic illustration-only seed.
+- `npm run acquire:jellyfish` — real Pexels footage acquisition + DB seed.
 
 ---
 

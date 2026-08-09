@@ -41,6 +41,9 @@ export type ServerConfig = {
 
   // Visuals
   pexelsApiKey?: string
+  pixabayApiKey?: string
+  mixkitFallback: boolean
+  assetCacheDir: string
 
   // Quality gates (fail-closed — default off to preserve existing behaviour)
   requireVideoFootage: boolean
@@ -54,6 +57,7 @@ export type ServerConfig = {
   reviewLimit: number
   autoApprove: boolean
   autoPublish: boolean
+  allowSilentAudio: boolean
 }
 
 const VALID_PROVIDERS: LlmProvider[] = ['openai', 'gemini', 'groq', 'openrouter', 'nvidia', 'ollama', 'local']
@@ -65,12 +69,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     : 'local'
 
   const dataDir = env.DATA_DIR || resolve(process.cwd(), 'data')
+  const resolvePath = (value: string | undefined, fallback: string) => {
+    const raw = value || fallback
+    try { return resolve(process.cwd(), raw) } catch { return raw }
+  }
 
   return {
     port: Number(env.PORT || 8787),
-    dbPath: env.SHORTS_DB_PATH || resolve(dataDir, 'shorts-autopilot.sqlite'),
-    mediaDir: env.MEDIA_DIR || resolve(dataDir, 'media'),
-    staticDir: env.STATIC_DIR || resolve(process.cwd(), 'dist'),
+    dbPath: resolvePath(env.SHORTS_DB_PATH, resolve(dataDir, 'shorts-autopilot.sqlite')),
+    mediaDir: resolvePath(env.MEDIA_DIR, resolve(dataDir, 'media')),
+    staticDir: resolvePath(env.STATIC_DIR, resolve(process.cwd(), 'dist')),
     appOrigin: env.APP_ORIGIN || env.CORS_ORIGIN || '*',
     apiToken: env.API_TOKEN,
     maxBodyBytes: Number(env.MAX_BODY_BYTES || 1_000_000),
@@ -100,6 +108,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     dograhApiKey: env.DOGRAH_API_KEY,
     speachesApiUrl: env.SPEACHES_API_URL,
     pexelsApiKey: env.PEXELS_API_KEY,
+    pixabayApiKey: env.PIXABAY_API_KEY,
+    mixkitFallback: env.MIXKIT_FALLBACK === 'true',
+    assetCacheDir: env.ASSET_CACHE_DIR || resolve(dataDir, 'assets'),
 
     requireVideoFootage: env.REQUIRE_VIDEO_FOOTAGE === 'true',
     requireResearch: env.REQUIRE_RESEARCH === 'true',
@@ -111,6 +122,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     reviewLimit: Number(env.REVIEW_LIMIT || 10),
     autoApprove: env.AUTO_APPROVE === 'true',
     autoPublish: env.AUTO_PUBLISH === 'true',
+    allowSilentAudio: env.ALLOW_SILENT_AUDIO === 'true',
   }
 }
 
@@ -134,7 +146,7 @@ export function providerReadiness(config: ServerConfig) {
     youtube: Boolean(config.youtubeClientId && config.youtubeClientSecret && config.youtubeRefreshToken),
     youtubeSearch: Boolean(config.youtubeApiKey),
     dograh: Boolean(config.dograhApiUrl || config.speachesApiUrl),
-    visuals: Boolean(config.pexelsApiKey),
+    visuals: Boolean(config.pexelsApiKey || config.pixabayApiKey || config.mixkitFallback),
     renderer: true,
     reviewMode: true,
   }

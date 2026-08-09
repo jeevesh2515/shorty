@@ -558,75 +558,15 @@ export async function discoverTopics(
 }
 
 // ---------------------------------------------------------------------------
-// Visual search
+// Visual search — multi-source via visual-sources.ts
 // ---------------------------------------------------------------------------
-// Stopwords that add no visual signal to a Pexels image/video search query
-const PEXELS_STOPWORDS = new Set([
-  'the', 'a', 'an', 'and', 'or', 'but', 'of', 'to', 'in', 'on', 'at', 'for', 'with',
-  'from', 'by', 'as', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'this',
-  'that', 'these', 'those', 'it', 'its', 'there', 'here', 'about', 'what', 'which',
-  'who', 'whom', 'when', 'where', 'why', 'how', 'not', 'no', 'so', 'if', 'then',
-  'than', 'too', 'very', 'just', 'can', 'will', 'would', 'could', 'should', 'may',
-  'might', 'must', 'do', 'does', 'did', 'have', 'has', 'had', 'i', 'you', 'we',
-  'they', 'he', 'she', 'me', 'my', 'your', 'our', 'their', 'him', 'her', 'them',
-  'most', 'more', 'much', 'many', 'some', 'any', 'all', 'every', 'each', 'one',
-  'dont', 'doesnt', 'didnt', 'wouldnt', 'couldnt', 'shouldnt', 'theres', 'youre',
-  'people', 'person', 'thing', 'things', 'way', 'part', 'into', 'over', 'under',
-  'up', 'down', 'out', 'off', 'again', 'after', 'before', 'between', 'through',
-  'only', 'own', 'same', 'other', 'such',
-])
-
-// Turn a script/title phrase into a compact keyword query for Pexels
-function derivePexelsKeywords(text: string): string {
-  const tokens = text.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/).filter(Boolean)
-  const seen = new Set<string>()
-  const keywords: string[] = []
-  for (const token of tokens) {
-    const word = token.replace(/^-+|-+$/g, '')
-    if (!word || word.length < 3 || PEXELS_STOPWORDS.has(word) || seen.has(word)) continue
-    seen.add(word)
-    keywords.push(word)
-  }
-  return keywords.length ? keywords.slice(0, 5).join(' ') : text.trim()
-}
+import { searchStock } from './visual-sources.js'
 
 export async function searchVisuals(
   query: string,
   config: ServerConfig,
 ): Promise<{ assets: VisualAsset[]; provider: string }> {
-  if (!config.pexelsApiKey) return { assets: [], provider: 'local-fallback' }
-  const searchQuery = derivePexelsKeywords(query)
-  const [photoData, videoResponse] = await Promise.all([
-    requestJson(
-      `https://api.pexels.com/v1/search?query=${encodeURIComponent(searchQuery)}&per_page=6&orientation=portrait&size=large`,
-      { headers: { Authorization: config.pexelsApiKey } },
-    ),
-    requestJson(
-      `https://api.pexels.com/videos/search?query=${encodeURIComponent(searchQuery)}&per_page=6&orientation=portrait`,
-      { headers: { Authorization: config.pexelsApiKey } },
-    ).catch(() => ({})),
-  ])
-  const photos = ((photoData.photos as Record<string, unknown>[] | undefined) || [])
-    .map(photo => {
-      const src = photo.src as Record<string, unknown>
-      return {
-        path: String(src.large2x || src.large || src.medium),
-        type: 'image' as const,
-        source: 'pexels',
-        credit: String(photo.photographer || ''),
-        license: 'Pexels License',
-      }
-    })
-    .filter(asset => asset.path)
-  const videoData = videoResponse as Record<string, unknown>
-  const clips: VisualAsset[] = []
-  for (const video of ((videoData.videos as Record<string, unknown>[] | undefined) || [])) {
-    const files = (video.video_files as Record<string, unknown>[] | undefined) || []
-    const source = files.find(file => String(file.quality) === 'hd' && Number(file.height || 0) >= 720) || files[0]
-    const user = (video.user as Record<string, unknown> | undefined) || {}
-    if (source?.link) clips.push({ path: String(source.link), type: 'video', source: 'pexels', credit: String(user.name || ''), license: 'Pexels License' })
-  }
-  return { assets: [...clips, ...photos], provider: 'pexels' }
+  return searchStock(query, config)
 }
 
 // ---------------------------------------------------------------------------
@@ -667,7 +607,7 @@ async function localMacVoiceover(text: string, outputDir: string): Promise<{ aud
   const aiff = join(outputDir, `${baseName}.aiff`)
   const mp3 = join(outputDir, `${baseName}.mp3`)
   try {
-    await execFileAsync('say', ['-v', 'Samantha', '-o', aiff, text])
+    await execFileAsync('say', ['-v', 'Samantha', '-r', '170', '-o', aiff, text])
     await runFfmpeg(['-y', '-i', aiff, '-codec:a', 'libmp3lame', '-b:a', '128k', mp3])
     return { audioUrl: `/media/${baseName}.mp3`, provider: 'macos-say-development-fallback' }
   } catch {
@@ -681,6 +621,14 @@ async function runFfmpeg(args: string[]) {
   return execFileAsync('ffmpeg', ['-loglevel', 'error', ...args], { maxBuffer: 50 * 1024 * 1024 })
 }
 
+async function probeMediaDuration(path: string): Promise<number | undefined> {
+  try {
+    const { stdout } = await execFileAsync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', path], { maxBuffer: 1024 * 1024 })
+    const seconds = Number(stdout.trim())
+    return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined
+  } catch { return undefined }
+}
+
 export async function renderVideo(
   video: Video,
   script: Script,
@@ -689,7 +637,15 @@ export async function renderVideo(
 ): Promise<{ finalVideoUrl: string; thumbnailUrl?: string; provider: string; renderManifest: RenderManifest }> {
     mkdirSync(mediaDir, { recursive: true })
     const output = join(mediaDir, `${video.id}.mp4`)
-    const duration = Math.min(45, Math.max(15, script.durationSec))
+    const audioPath = video.audioUrl?.replace(/^\/media\//, '')
+    const localAudio = audioPath ? join(mediaDir, audioPath) : undefined
+    const hasAudio = Boolean(localAudio && existsSync(localAudio))
+    // The narration drives the cut: size the render to the ACTUAL voiceover length
+    // (probed via ffprobe) so the ending CTA is not clipped by a stale durationSec.
+    // Note: the 15-45s clamp still applies — a narration outside Shorts bounds will
+    // be trimmed/padded to that window by design.
+    const narrationSec = hasAudio ? await probeMediaDuration(localAudio!) : undefined
+    const duration = Math.min(45, Math.max(15, narrationSec ?? script.durationSec))
     const assets = video.visualAssets.length ? video.visualAssets : [{ path: '', type: 'illustration' as const, source: 'local-fallback', role: 'Explained science visual' }]
     const sceneDuration = duration / assets.length
     const scenePaths: string[] = []
@@ -724,8 +680,6 @@ export async function renderVideo(
     await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', stitched])
     const captions = join(mediaDir, `${video.id}-captions.srt`)
     await writeFile(captions, toSrt(manifest.captions))
-    const audioPath = video.audioUrl?.replace(/^\/media\//, '')
-    const localAudio = audioPath ? join(mediaDir, audioPath) : undefined
     const captionImages: Array<{ path: string; duration: number }> = []
     for (const [index, cue] of manifest.captions.entries()) {
       const image = join(mediaDir, `${video.id}-caption-${index}.png`)
@@ -740,8 +694,8 @@ export async function renderVideo(
     await writeFile(captionList, captionEntries.join('\n'))
     await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', captionList, '-r', '30', '-c:v', 'qtrle', '-pix_fmt', 'argb', captionVideo])
 
-    const audioArgs = localAudio && existsSync(localAudio)
-      ? ['-i', localAudio, '-shortest']
+    const audioArgs: string[] = hasAudio
+      ? ['-i', localAudio as string, '-shortest']
       : ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', String(duration)]
 
     await runFfmpeg([
@@ -770,29 +724,40 @@ export async function renderVideo(
 function buildRenderManifest(script: Script, existing: RenderManifest | undefined, duration: number, usesSyntheticVisuals: boolean, hasVideoPlan: boolean): RenderManifest {
   const words = script.text.replace(/\s+/g, ' ').trim().split(' ')
   const captions: CaptionCue[] = []
-  const wordsPerCue = 4
+  const wordsPerCue = 3
   for (let index = 0; index < words.length; index += wordsPerCue) {
     const startSec = Number((duration * index / words.length).toFixed(2))
     const endSec = Number((duration * Math.min(index + wordsPerCue, words.length) / words.length).toFixed(2))
     captions.push({ startSec, endSec, text: words.slice(index, index + wordsPerCue).join(' ').toUpperCase() })
   }
   const sources = existing?.factualSources?.length ? existing.factualSources : script.factualSources?.length ? script.factualSources : script.text.includes('Turritopsis') ? ['https://pubmed.ncbi.nlm.nih.gov/31619459/'] : []
+  // Reuse stored captions only when their timeline still matches the render duration
+  // (within rounding tolerance). Stale timelines — whether SHORTER or LONGER than the
+  // new duration — would be cut by overlay=shortest=1 and clip or misalign the burned-in
+  // captions. Word-timed cues end exactly at `duration`, so a tight tolerance is safe.
+  const storedLastEnd = existing?.captions?.length ? (existing.captions[existing.captions.length - 1]?.endSec ?? 0) : 0
+  const storedTimelineMatches = existing?.captions?.length ? Math.abs(storedLastEnd - duration) <= 1 : false
+  const captionsForRender = storedTimelineMatches && existing?.captions ? existing.captions : captions
+  // Compliance and synthetic disclosure are recomputed from what THIS render actually
+  // staged — never carried over from a previous render, or a re-render whose footage
+  // download failed would keep claiming authentic provenance.
+  const compliance = [
+    'Original narration',
+    'Captioned for accessibility',
+    ...(usesSyntheticVisuals
+      ? ['Generated illustrative visuals — not authentic footage']
+      : hasVideoPlan
+        ? ['Asset provenance recorded']
+        : ['Static imagery — no authentic moving footage']),
+    ...(sources.length ? ['Source-backed factual claim'] : []),
+  ]
   return {
-    captions: existing?.captions?.length ? existing.captions : captions,
+    captions: captionsForRender,
     posterFrameSec: existing?.posterFrameSec ?? 0.75,
     factualSources: sources,
-    requiresSyntheticDisclosure: existing?.requiresSyntheticDisclosure ?? usesSyntheticVisuals,
+    requiresSyntheticDisclosure: usesSyntheticVisuals,
     contactSheetUrl: existing?.contactSheetUrl,
-    compliance: existing?.compliance?.length ? existing.compliance : [
-      'Original narration',
-      'Captioned for accessibility',
-      ...(usesSyntheticVisuals
-        ? ['Generated illustrative visuals — not authentic footage']
-        : hasVideoPlan
-          ? ['Asset provenance recorded']
-          : ['Static imagery — no authentic moving footage']),
-      ...(sources.length ? ['Source-backed factual claim'] : []),
-    ],
+    compliance,
   }
 }
 
