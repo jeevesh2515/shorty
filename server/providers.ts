@@ -696,7 +696,7 @@ export async function renderVideo(
         ? 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,eq=contrast=1.06:saturation=1.08,format=yuv420p'
         : `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(zoom+0.00065,1.16)':d=${sceneFrames}:s=1080x1920:fps=30,eq=contrast=1.06:saturation=1.08,format=yuv420p`
       const args = isActualVideo
-        ? ['-y', '-stream_loop', '1', '-i', source, '-t', String(sceneDuration), '-an', '-vf', filter, '-r', '30', scene]
+        ? ['-y', '-stream_loop', '-1', '-i', source, '-t', String(sceneDuration), '-an', '-vf', filter, '-r', '30', scene]
         : ['-y', '-loop', '1', '-i', source, '-t', String(sceneDuration), '-an', '-vf', filter, '-r', '30', scene]
       await runFfmpeg(args)
       scenePaths.push(scene)
@@ -987,4 +987,3 @@ export async function generateThumbnailConcept(
     return { provider: 'local-fallback' }
   }
 }
-# force rebuild
