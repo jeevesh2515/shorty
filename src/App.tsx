@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import posthog from 'posthog-js'
 import { apiIsConfigured, apiRequest } from './api'
+import { areTopicsSimilar } from '../server/domain.js'
 
 const API_MODE = apiIsConfigured()
 
@@ -397,6 +398,20 @@ function App() {
         posthog.capture('voiceover_generation_completed', { api_mode: API_MODE, topic_id: topic.id, word_timestamps_synced: true })
         showToast(`Fresh script generated & judged with ${result.provider}`)
       } catch (error) { showToast(error instanceof Error ? error.message : 'Script generation failed') }
+      return
+    }
+    const existingScriptOrVideoTopics = state.topics.filter(t => {
+      if (t.id === topic.id) return false
+      const hasScript = state.scripts.some(s => s.topicId === t.id)
+      const hasVideo = state.videos.some(v => {
+        const s = state.scripts.find(sc => sc.id === v.scriptId)
+        return s?.topicId === t.id && v.status !== 'failed'
+      })
+      return hasScript || hasVideo
+    })
+    const similar = existingScriptOrVideoTopics.find(t => areTopicsSimilar(topic.title, t.title))
+    if (similar) {
+      showToast(`A video or script already exists for a similar topic: "${similar.title}"`)
       return
     }
     const stamp = Date.now()
