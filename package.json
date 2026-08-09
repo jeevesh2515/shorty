@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "db:seed": "tsx scripts/seed.ts",
     "seed:jellyfish": "tsx scripts/seed-jellyfish.ts",
+    "acquire:jellyfish": "tsx scripts/acquire-jellyfish.ts",
     "api:smoke": "tsx scripts/smoke.ts",
     "pipeline:smoke": "tsx scripts/pipeline-smoke.ts",
     "docker:validate": "tsx scripts/docker-validate.ts"
@@ -22,6 +23,7 @@
   "dependencies": {
     "@vitejs/plugin-react": "latest",
     "better-sqlite3": "latest",
+    "dotenv": "^17.4.2",
     "posthog-js": "^1.414.0",
     "react": "latest",
     "react-dom": "latest",

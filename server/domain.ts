@@ -10,6 +10,7 @@ export type VisualAsset = {
   source: string
   credit?: string
   license?: string
+  sourcePageUrl?: string
   verifiedSpecies?: boolean
   role?: string
   startSec?: number

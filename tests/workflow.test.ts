@@ -1,13 +1,16 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.setConfig({ testTimeout: 180000, hookTimeout: 180000 })
+import { execFile } from 'node:child_process'
 import { mkdirSync, readdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { rmSync } from 'node:fs'
+import { promisify } from 'node:util'
 import { loadConfig } from '../server/config.js'
 import { ShortsDatabase } from '../server/db.js'
 import { ShortsWorkflow } from '../server/workflow.js'
+import { renderVideo } from '../server/providers.js'
 
 // Mock ONLY uploadToYouTube; every other provider (renderVideo, generateVoiceover, ...)
 // stays real so the full render tests above keep exercising the actual pipeline.
@@ -27,12 +30,25 @@ afterAll(() => {
 
 function existsSyncForTests(path: string) { try { return statSync(path) ? true : false } catch { return false } }
 
+const execFileAsync = promisify(execFile)
+
+async function makeNarration(mediaDir: string, seconds: number, name: string): Promise<string> {
+  const mp3 = join(mediaDir, name)
+  await execFileAsync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `sine=frequency=220:duration=${seconds}`, '-c:a', 'libmp3lame', '-b:a', '64k', mp3], { maxBuffer: 10 * 1024 * 1024 })
+  return mp3
+}
+
+async function probeSeconds(path: string): Promise<number> {
+  const { stdout } = await execFileAsync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', path], { maxBuffer: 1024 * 1024 })
+  return Number(stdout.trim())
+}
+
 describe('workflow.localFallbackPipeline', () => {
   it('creates topic, script, video, and upload with a real rendered MP4', async () => {
     const mediaDir = join(tempRoot, 'media')
     mkdirSync(mediaDir, { recursive: true })
     const db = new ShortsDatabase({ filename: ':memory:' })
-    const config = { ...loadConfig({}), dbPath: ':memory:', mediaDir }
+    const config = { ...loadConfig({}), dbPath: ':memory:', mediaDir, allowSilentAudio: true }
     const workflow = new ShortsWorkflow(db, config)
 
     const result = await workflow.runManual({ niche: 'Science', topicTitle: 'Why octopuses edit their own genes' })
@@ -72,7 +88,7 @@ describe('workflow.localFallbackPipeline', () => {
     const mediaDir = join(tempRoot, 'media2')
     mkdirSync(mediaDir, { recursive: true })
     const db = new ShortsDatabase({ filename: ':memory:' })
-    const config = { ...loadConfig({}), dbPath: ':memory:', mediaDir }
+    const config = { ...loadConfig({}), dbPath: ':memory:', mediaDir, allowSilentAudio: true }
     const workflow = new ShortsWorkflow(db, config)
 
     const firstRun = await workflow.runManual({ niche: 'Travel', topicTitle: 'Hidden cities' })
@@ -92,7 +108,7 @@ describe('workflow.localFallbackPipeline', () => {
     const mediaDir = join(tempRoot, 'media-approval')
     mkdirSync(mediaDir, { recursive: true })
     const db = new ShortsDatabase({ filename: ':memory:' })
-    const config = { ...loadConfig({}), dbPath: ':memory:', mediaDir }
+    const config = { ...loadConfig({}), dbPath: ':memory:', mediaDir, allowSilentAudio: true }
     const workflow = new ShortsWorkflow(db, config)
     const result = await workflow.runManual({ niche: 'Science', topicTitle: 'Why leaves change colour' })
     const approved = await workflow.approveForPublish(result.upload.id)
@@ -192,6 +208,68 @@ describe('workflow.localFallbackPipeline', () => {
     expect(script?.status).toBe('draft')
     expect(script?.judgeVerdict).toBe('rejected')
     expect(script?.factualSources ?? []).toHaveLength(0)
+    db.close()
+  })
+
+  it('sizes the render to the ACTUAL narration length, not stale durationSec, and regenerates captions on re-render', async () => {
+    const mediaDir = join(tempRoot, 'media-narration-duration')
+    mkdirSync(mediaDir, { recursive: true })
+    const db = new ShortsDatabase({ filename: ':memory:' })
+    const config = { ...loadConfig({}), dbPath: ':memory:', mediaDir }
+
+    const now = new Date().toISOString()
+    const script = {
+      id: 'narration-script',
+      topicId: 'narration-topic',
+      text: 'One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twenty one twenty two twenty three twenty four twenty five.',
+      durationSec: 30, // stale estimate — the narration below is shorter
+      hook: 'A hook',
+      cta: 'Follow',
+      titleSuggestion: 'Narration test',
+      descriptionSuggestion: 'Desc',
+      tagsSuggestion: ['science'],
+      factualSources: ['https://doi.org/10.1038/nature11718'],
+      status: 'approved' as const,
+      judgeScore: 9.2,
+      judgeVerdict: 'approved' as const,
+      judgeFeedback: 'ok',
+      judgeCriteria: { hookScore: 2.3, retentionScore: 2.3, viralityScore: 2.3, pacingScore: 2.3 },
+      createdAt: now,
+      updatedAt: now,
+    }
+    const video = {
+      id: 'narration-video',
+      scriptId: script.id,
+      visualAssets: [{ path: '', type: 'illustration' as const, source: 'local-fallback', role: 'Test scene' }],
+      status: 'rendering' as const,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    // First render: narration is 18s, script says 30s → the video must follow the audio.
+    await makeNarration(mediaDir, 18, 'narration-18s.mp3')
+    const first = await renderVideo({ ...video, audioUrl: '/media/narration-18s.mp3' }, script, config, mediaDir)
+    const firstSeconds = await probeSeconds(join(mediaDir, `${video.id}.mp4`))
+    expect(firstSeconds).toBeGreaterThanOrEqual(17)
+    expect(firstSeconds).toBeLessThanOrEqual(19)
+    expect(first.renderManifest.captions.at(-1)?.endSec).toBeLessThanOrEqual(19)
+
+    // Re-render with a LONGER narration (28s) while the stored manifest still holds
+    // the 18s-timed captions → captions must be regenerated to span the new duration,
+    // otherwise overlay=shortest=1 truncates the final video back to 18s.
+    await makeNarration(mediaDir, 28, 'narration-28s.mp3')
+    const second = await renderVideo(
+      { ...video, audioUrl: '/media/narration-28s.mp3', renderManifest: first.renderManifest },
+      script,
+      config,
+      mediaDir,
+    )
+    const secondSeconds = await probeSeconds(join(mediaDir, `${video.id}.mp4`))
+    expect(secondSeconds).toBeGreaterThanOrEqual(27)
+    expect(secondSeconds).toBeLessThanOrEqual(29)
+    expect(second.renderManifest.captions.at(-1)?.endSec).toBeGreaterThanOrEqual(27)
+    expect(second.renderManifest.captions.at(-1)?.endSec).toBeLessThanOrEqual(29)
+
     db.close()
   })
 

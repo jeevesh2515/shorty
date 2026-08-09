@@ -31,5 +31,5 @@ This folder contains all living documentation for the Shorts Autopilot agentic A
 - **TTS / Voice**: Dograh (https://github.com/dograh-hq/dograh) — open-source, self-hosted, BYOK. Replaces ElevenLabs. Zero per-call cost when self-hosted.
 - **Platform**: Base44 (free tier — 25 message credits/month, 100 integration credits)
 - **LLM**: Your own API keys (OpenAI / Gemini / other)
-- **Video**: Stock footage + captions or AI-generated visuals
+- **Video**: Multi-source stock footage (Pexels, Pixabay, Mixkit) + captions or AI-generated visuals. Provenance + licence verification cached in `data/assets/`.
 - **YouTube**: Data API v3 for uploads + Analytics

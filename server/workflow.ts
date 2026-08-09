@@ -141,10 +141,20 @@ export class ShortsWorkflow {
       if (this.config.requireVideoFootage && !assets.some(asset => asset.type === 'video')) {
         throw new DomainError('FOOTAGE_REQUIRED', 'Authentic video footage is required, but only images or generated illustrations were found', 422)
       }
-      const visualsProvider = !assets.length ? 'local-illustrated-fallback' : assets.some(asset => asset.type === 'video') ? 'pexels-video' : assets.some(asset => asset.source === 'pexels') ? 'pexels-images' : 'local-illustrated-fallback'
+      const videoAssets = assets.filter(asset => asset.type === 'video')
+      const imageAssets = assets.filter(asset => asset.type === 'image')
+      const visualsProvider = !assets.length ? 'local-illustrated-fallback' : videoAssets.length ? `${videoAssets[0].source}-video` : imageAssets.length ? `${imageAssets[0].source}-images` : 'local-illustrated-fallback'
+      this.db.audit('video', videoId, 'visuals_acquired', 'acquired', 'Visual assets acquired with provenance', {
+        count: assets.length,
+        provider: visualsProvider,
+        assets: assets.map(a => ({ source: a.source, license: a.license, credit: a.credit, sourcePageUrl: a.sourcePageUrl, type: a.type, role: a.role })),
+      })
       // An empty asset list is intentional: the renderer creates a deterministic SVG fallback.
       this.db.updateVideo(videoId, { visualAssets: assets })
       const voice = await generateVoiceover(script.text, this.config, this.config.mediaDir)
+      if (!voice.audioUrl && !this.config.allowSilentAudio) {
+        throw new DomainError('VOICEOVER_REQUIRED', 'A TTS provider must return an audio file before this video can be reviewed or published', 412)
+      }
       if (voice.audioUrl) this.db.updateVideo(videoId, { audioUrl: voice.audioUrl })
       const updated = this.db.getVideo(videoId)
       if (!updated) throw new Error('Video disappeared during render')
