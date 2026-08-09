@@ -605,18 +605,25 @@ export async function generateVoiceover(
   }
 
   // 2) Free high-quality fallback: Microsoft Edge TTS (no API key, works on Linux/Docker/Railway)
+  //    Uses node-edge-tts which wraps the same edge_tts Python API.
   try {
     const { EdgeTTS } = await import('node-edge-tts')
     const fileName = `voice-${Date.now()}.mp3`
-    const path = join(outputDir, fileName)
+    const outPath = join(outputDir, fileName)
     const tts = new EdgeTTS({ voice: 'en-GB-SoniaNeural' })
-    await tts.ttsPromise(text, path)
-    return { audioUrl: `/media/${fileName}`, provider: 'edge-tts' }
-  } catch {
-    // fall through to local fallback
+    await tts.ttsPromise(text, outPath)
+    const { existsSync: exists, statSync: stat } = await import('node:fs')
+    if (exists(outPath) && stat(outPath).size > 1024) {
+      return { audioUrl: `/media/${fileName}`, provider: 'edge-tts' }
+    }
+    throw new Error('Output file missing or too small')
+  } catch (ttsErr) {
+    console.warn('[TTS] node-edge-tts failed (may be a Railway network block):', ttsErr instanceof Error ? ttsErr.message : ttsErr)
+    console.warn('[TTS] Set SPEACHES_API_URL to the deployed speaches service to get reliable voiceover on Railway.')
   }
 
   // 3) Development-only macOS fallback
+
   return localMacVoiceover(text, outputDir)
 }
 
