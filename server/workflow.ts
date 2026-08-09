@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ServerConfig } from './config.js'
 import { ShortsDatabase, stableIdempotencyKey } from './db.js'
-import { DomainError, nowIso } from './domain.js'
+import { DomainError, areTopicsSimilar, nowIso } from './domain.js'
 import { UsageLedger } from './usage.js'
 import { discoverTopics, generateScript, generateThumbnailConcept, generateVoiceover, judgeScript, renderVideo, searchVisuals, uploadToYouTube, fetchYouTubeAnalytics } from './providers.js'
 
@@ -12,21 +12,22 @@ export class ShortsWorkflow {
   constructor(private readonly db: ShortsDatabase, private readonly config: ServerConfig) { this.usage = new UsageLedger(db, config.monthlyAiBudgetUsd) }
 
   async createTopic(input: { title: string; niche: string; source?: 'trending' | 'evergreen' | 'manual'; rationale?: string; metrics?: Record<string, unknown> }) {
+    const existingTopics = this.db.listTopics()
+    const similar = existingTopics.find(t => areTopicsSimilar(t.title, input.title))
+    if (similar) {
+      if (similar.status === 'new') return similar
+      throw new DomainError('SIMILAR_TOPIC_EXISTS', `A similar topic already exists: "${similar.title}"`, 409)
+    }
     const now = nowIso()
     return this.db.createTopic({ id: randomUUID(), title: input.title, niche: input.niche, source: input.source || 'manual', status: 'new', rationale: input.rationale, metrics: input.metrics || {}, createdAt: now, updatedAt: now })
   }
 
   async discoverAndStore(niche: string) {
     const result = await discoverTopics(niche, this.config)
-    const existingTitles = new Set(this.db.listTopics().map(t => t.title.toLowerCase()))
-    const topics = result.topics.map((item, index) => {
-      let uniqueTitle = item.title
-      if (existingTitles.has(uniqueTitle.toLowerCase())) {
-        const count = Array.from(existingTitles).filter(t => t.startsWith(uniqueTitle.toLowerCase())).length + 1
-        uniqueTitle = `${item.title} #${count}`
-      }
-      existingTitles.add(uniqueTitle.toLowerCase())
-      return this.db.createTopic({ id: randomUUID(), ...item, title: uniqueTitle, status: 'new', createdAt: nowIso(), updatedAt: nowIso() })
+    const existingTopics = this.db.listTopics()
+    const candidateTopics = result.topics.filter(item => !existingTopics.some(t => areTopicsSimilar(t.title, item.title)))
+    const topics = candidateTopics.map((item) => {
+      return this.db.createTopic({ id: randomUUID(), ...item, title: item.title, status: 'new', createdAt: nowIso(), updatedAt: nowIso() })
     })
     return { provider: result.provider, topics }
   }
@@ -34,7 +35,26 @@ export class ShortsWorkflow {
   async generateScript(topicId: string, maxAttempts = 3, minScore = 9.0) {
     const topic = this.db.getTopic(topicId)
     if (!topic) throw new DomainError('NOT_FOUND', `Topic ${topicId} was not found`, 404)
-    
+
+    const allTopics = this.db.listTopics()
+    const allScripts = this.db.listScripts()
+    const allVideos = this.db.listVideos().filter(v => v.status !== 'failed')
+
+    const topicsWithContent = allTopics.filter(t => {
+      if (t.id === topicId) return false
+      const hasScript = allScripts.some(s => s.topicId === t.id && (s.status === 'approved' || s.status === 'draft'))
+      const hasVideo = allVideos.some(v => {
+        const s = allScripts.find(scr => scr.id === v.scriptId)
+        return s?.topicId === t.id
+      })
+      return hasScript || hasVideo
+    })
+
+    const similarTopic = topicsWithContent.find(t => areTopicsSimilar(topic.title, t.title))
+    if (similarTopic) {
+      throw new DomainError('SIMILAR_TOPIC_EXISTS', `A script or video has already been generated for a similar topic: "${similarTopic.title}". Script generation is prevented to avoid duplicate videos.`, 409)
+    }
+
     let lastDraft: any
     let lastJudge: any
     let lastProvider = 'local-fallback'
@@ -135,6 +155,13 @@ export class ShortsWorkflow {
       if (!assets.length) {
         const result = await searchVisuals(script.titleSuggestion || script.hook, this.config)
         assets = result.assets
+      }
+      if (assets.length > 8) {
+        const videos = assets.filter(a => a.type === 'video')
+        const images = assets.filter(a => a.type === 'image')
+        const cappedVideos = videos.slice(0, 6)
+        const cappedImages = images.slice(0, Math.max(0, 8 - cappedVideos.length))
+        assets = [...cappedVideos, ...cappedImages]
       }
       // Authentic-footage quality gate: when enabled, a topic that needs real moving footage
       // must never ship with generated illustration cards instead.

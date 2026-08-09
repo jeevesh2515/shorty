@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import type { Analytics, AuditEvent, Script, Topic, Upload, Video } from './domain.js'
-import { assertNonEmpty, assertStatusTransition, nowIso, safeJsonParse } from './domain.js'
+import { areTopicsSimilar, assertNonEmpty, assertStatusTransition, nowIso, safeJsonParse } from './domain.js'
 
 export type DbOptions = { filename?: string; seed?: boolean }
 
@@ -160,9 +160,48 @@ export class ShortsDatabase {
   }
 
   cleanupUnscriptedTopics() {
-    const unscripted = this.listTopics().filter(t => t.status === 'new')
-    unscripted.forEach(t => this.deleteTopic(t.id))
-    return { cleanedCount: unscripted.length }
+    const allTopics = this.listTopics()
+    const uploads = this.listUploads()
+    const videos = this.listVideos()
+    const scripts = this.listScripts()
+
+    const toDelete = new Set<string>()
+
+    // Delete unscripted topics
+    allTopics.filter(t => t.status === 'new').forEach(t => toDelete.add(t.id))
+
+    // Remove duplicate/similar topics
+    const keptTopics: typeof allTopics = []
+    for (const t of allTopics) {
+      if (toDelete.has(t.id)) continue
+      const similar = keptTopics.find(kept => areTopicsSimilar(kept.title, t.title))
+      if (similar) {
+        const tHasUpload = uploads.some(u => {
+          const v = videos.find(vid => vid.id === u.videoId)
+          const s = scripts.find(scr => scr.id === v?.scriptId)
+          return s?.topicId === t.id
+        })
+        const similarHasUpload = uploads.some(u => {
+          const v = videos.find(vid => vid.id === u.videoId)
+          const s = scripts.find(scr => scr.id === v?.scriptId)
+          return s?.topicId === similar.id
+        })
+
+        if (tHasUpload && !similarHasUpload) {
+          toDelete.add(similar.id)
+          const idx = keptTopics.indexOf(similar)
+          if (idx !== -1) keptTopics.splice(idx, 1)
+          keptTopics.push(t)
+        } else {
+          toDelete.add(t.id)
+        }
+      } else {
+        keptTopics.push(t)
+      }
+    }
+
+    toDelete.forEach(id => this.deleteTopic(id))
+    return { cleanedCount: toDelete.size }
   }
 
   deleteScript(id: string) {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { ShortsDatabase, stableIdempotencyKey } from '../server/db.js'
-import { DomainError } from '../server/domain.js'
+import { DomainError, areTopicsSimilar } from '../server/domain.js'
 
 let db: ShortsDatabase
 
@@ -35,5 +35,21 @@ describe('ShortsDatabase', () => {
     expect(() => db.updateTopicStatus(topic.id, 'scripted')).toThrowError(DomainError)
     expect(db.updateTopicStatus(topic.id, 'selected')?.status).toBe('selected')
     expect(db.updateTopicStatus(topic.id, 'rejected')?.status).toBe('rejected')
+  })
+
+  it('detects similar topics and cleans up redundant duplicates', () => {
+    expect(areTopicsSimilar('The Amazing Octopus Intelligence', 'The Amazing Octopus Intelligence #2')).toBe(true)
+    expect(areTopicsSimilar('This Jellyfish Can Rewind Its Life 🪼', 'The Immortal Jellyfish')).toBe(true)
+    expect(areTopicsSimilar('Why Some Animals Never Age', 'The creature that reverses its own age')).toBe(true)
+    expect(areTopicsSimilar('How to make a Short with a zero-dollar toolchain', 'The Amazing Octopus Intelligence')).toBe(false)
+
+    db = new ShortsDatabase({ filename: ':memory:' })
+    const now = new Date().toISOString()
+    const t1 = db.createTopic({ id: randomUUID(), title: 'The Immortal Jellyfish', niche: 'Science', source: 'manual', status: 'new', metrics: {}, createdAt: now, updatedAt: now })
+    const t2 = db.createTopic({ id: randomUUID(), title: 'This Jellyfish Can Rewind Its Life 🪼', niche: 'Science', source: 'manual', status: 'new', metrics: {}, createdAt: now, updatedAt: now })
+
+    const result = db.cleanupUnscriptedTopics()
+    expect(result.cleanedCount).toBe(2)
+    expect(db.listTopics().length).toBe(0)
   })
 })
