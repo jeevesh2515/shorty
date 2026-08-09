@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
 import { promisify } from 'node:util'
@@ -862,6 +862,12 @@ export async function renderVideo(
     } catch (_contactErr) {
       // Optional contact sheet thumbnail tile
     }
+
+    // Everything above the final MP4 is scaffolding. Nothing used to remove it, so each
+    // render left roughly a quarter-gigabyte of scene clips and stitched intermediates on
+    // disk permanently — enough to fill a Railway volume within weeks at one video a day.
+    cleanupRenderIntermediates(mediaDir, video.id)
+
     return {
       finalVideoUrl: `/media/${basename(output)}`,
       thumbnailUrl: `/media/${basename(thumbnail)}`,
@@ -918,6 +924,53 @@ function buildRenderManifest(
     compliance,
     captionTiming,
   }
+}
+
+/**
+ * Delete per-render scaffolding, keeping only what is actually served or reused.
+ *
+ * Kept: `<id>.mp4` (final), `<id>-poster.jpg`, `<id>-contact.jpg`, `<id>-captions.srt`
+ * (uploadable to YouTube as a caption track), `<id>-captions.ass`, and `voice-*.mp3`
+ * plus its `.words.json` sidecar, which a re-render needs to stay in sync.
+ *
+ * Removed: scene clips, the stitched pre-caption master, concat list files, per-cue caption
+ * PNGs and the qtrle alpha track from the legacy caption path. On a 36s Short these came to
+ * roughly 240MB — several times the size of the deliverable.
+ *
+ * Set `KEEP_RENDER_INTERMEDIATES=true` to retain them when debugging a bad render.
+ */
+export function cleanupRenderIntermediates(mediaDir: string, videoId: string): { removed: number; bytes: number } {
+  const result = { removed: 0, bytes: 0 }
+  if (process.env.KEEP_RENDER_INTERMEDIATES === 'true') return result
+
+  const disposable = (name: string) =>
+    name.startsWith(`${videoId}-scene-`)
+    || name === `${videoId}-scenes.txt`
+    || name === `${videoId}-stitched.mp4`
+    || name === `${videoId}-captions.txt`
+    || name === `${videoId}-captions.mov`
+    || name.startsWith(`${videoId}-caption-`)
+
+  try {
+    for (const name of readdirSync(mediaDir)) {
+      if (!disposable(name)) continue
+      const path = join(mediaDir, name)
+      try {
+        result.bytes += statSync(path).size
+        unlinkSync(path)
+        result.removed += 1
+      } catch {
+        // A file already gone, or held open, is not worth failing a completed render over.
+      }
+    }
+  } catch {
+    return result
+  }
+
+  if (result.removed) {
+    console.log(`[render] cleaned ${result.removed} intermediates (${(result.bytes / 1_048_576).toFixed(1)}MB) for ${videoId}`)
+  }
+  return result
 }
 
 function toSrt(cues: CaptionCue[]) { return cues.map((cue, index) => `${index + 1}\n${srtTime(cue.startSec)} --> ${srtTime(cue.endSec)}\n${cue.text}\n`).join('\n') }
