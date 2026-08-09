@@ -6,6 +6,7 @@ import type { ServerConfig } from './config.js'
 import { providerReadiness } from './config.js'
 import { ShortsDatabase } from './db.js'
 import { DomainError } from './domain.js'
+import type { VisualAsset } from './domain.js'
 import { ShortsWorkflow } from './workflow.js'
 import { requestJson } from './providers.js'
 
@@ -69,6 +70,13 @@ export function createHttpServer(db: ShortsDatabase, workflow: ShortsWorkflow, c
       if (req.method === 'DELETE' && videoMatch) { ok(res, await workflow.deleteVideo(videoMatch[1])); return }
       const videoRender = url.pathname.match(/^\/api\/videos\/([^/]+)\/render$/)
       if (req.method === 'POST' && videoRender) { ok(res, await workflow.produceVideo(videoRender[1])); return }
+      // Attach externally-produced footage (Veo, Higgsfield, hand-picked stock) so it
+      // renders through the normal pipeline rather than a parallel one.
+      const videoAssets = url.pathname.match(/^\/api\/videos\/([^/]+)\/assets$/)
+      if (req.method === 'PATCH' && videoAssets) { const body = await readBody(req, config.maxBodyBytes); ok(res, await workflow.setVisualAssets(videoAssets[1], Array.isArray(body.assets) ? body.assets as VisualAsset[] : [])); return }
+      // Ingest a finished MP4 rendered outside the container.
+      const videoMedia = url.pathname.match(/^\/api\/videos\/([^/]+)\/media$/)
+      if (req.method === 'POST' && videoMedia) { const body = await readBody(req, config.maxBodyBytes); ok(res, await workflow.attachRenderedMedia(videoMedia[1], String(body.sourceUrl || ''))); return }
       if (req.method === 'GET' && url.pathname === '/api/uploads') { ok(res, db.listUploads()); return }
       if (req.method === 'POST' && url.pathname === '/api/uploads') { const body = await readBody(req, config.maxBodyBytes); ok(res, await workflow.createUpload(String(body.videoId), { title: String(body.title || ''), description: body.description ? String(body.description) : undefined, tags: Array.isArray(body.tags) ? body.tags.map(String) : [], scheduledAt: body.scheduledAt ? String(body.scheduledAt) : undefined }), 201); return }
       const uploadMatch = url.pathname.match(/^\/api\/uploads\/([^/]+)$/)
@@ -85,7 +93,7 @@ export function createHttpServer(db: ShortsDatabase, workflow: ShortsWorkflow, c
       if (req.method === 'PATCH' && url.pathname === '/api/settings/automation') { const body = await readBody(req, config.maxBodyBytes); const paused = Boolean(body.paused); db.setSetting('automation_paused', String(paused)); db.audit('job', 'automation', 'setting_changed', paused ? 'paused' : 'active', paused ? 'Automation paused' : 'Automation resumed'); ok(res, { paused }); return }
       if (req.method === 'PATCH' && url.pathname === '/api/settings/auto-publish') { const body = await readBody(req, config.maxBodyBytes); if (body.autoApprove !== undefined) db.setSetting('auto_approve', String(Boolean(body.autoApprove))); if (body.autoPublish !== undefined) db.setSetting('auto_publish', String(Boolean(body.autoPublish))); db.audit('job', 'settings', 'auto_publish_updated', 'updated', 'Auto-publish settings updated', { autoApprove: Boolean(body.autoApprove), autoPublish: Boolean(body.autoPublish) }); ok(res, { autoApprove: db.getSetting('auto_approve') === 'true', autoPublish: db.getSetting('auto_publish') === 'true' }); return }
       if (req.method === 'POST' && url.pathname === '/api/runs/manual') { const body = await readBody(req, config.maxBodyBytes); ok(res, await workflow.runManual({ niche: String(body.niche || 'Productivity'), topicTitle: body.topicTitle ? String(body.topicTitle) : undefined }), 201); return }
-      if (req.method === 'POST' && url.pathname === '/api/runs/scheduled') { ok(res, await workflow.runScheduled(), 201); return }
+      if (req.method === 'POST' && url.pathname === '/api/runs/scheduled') { const body = await readBody(req, config.maxBodyBytes); ok(res, await workflow.runScheduled({ force: body.force === true }), 201); return }
       if (req.method === 'GET' && url.pathname === '/api/auth/youtube') { const redirect = await youtubeOAuthRedirect(config); ok(res, redirect); return }
       if (req.method === 'GET' && url.pathname.startsWith('/api/auth/youtube/callback')) { const code = url.searchParams.get('code'); if (!code) { send(res, 400, { ok: false, error: { code: 'MISSING_CODE', message: 'Missing authorization code' } }); return } const tokens = await youtubeOAuthCallback(code, config); db.setSetting('youtube_refresh_token', tokens.refreshToken); db.audit('job', 'youtube', 'oauth_connected', 'connected', 'YouTube OAuth connected', { expiresIn: tokens.expiresIn }); ok(res, { connected: true }); return }
       if (req.method === 'GET' && url.pathname === '/api/auth/youtube/status') { const refreshToken = db.getSetting('youtube_refresh_token'); ok(res, { connected: Boolean(refreshToken || config.youtubeRefreshToken) }); return }
