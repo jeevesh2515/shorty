@@ -645,7 +645,7 @@ async function localMacVoiceover(text: string, outputDir: string): Promise<{ aud
 // Video renderer — FFmpeg + local PNG fallback
 // ---------------------------------------------------------------------------
 async function runFfmpeg(args: string[]) {
-  console.error("[KILO_FFMPEG]", args); return execFileAsync('ffmpeg', ['-loglevel', 'error', ...args], { maxBuffer: 50 * 1024 * 1024 })
+  return execFileAsync('ffmpeg', ['-loglevel', 'error', ...args], { maxBuffer: 50 * 1024 * 1024 })
 }
 
 async function probeMediaDuration(path: string): Promise<number | undefined> {
