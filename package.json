@@ -21,9 +21,11 @@
     "docker:validate": "tsx scripts/docker-validate.ts"
   },
   "dependencies": {
+    "@bestcodes/edge-tts": "^3.0.1",
     "@vitejs/plugin-react": "latest",
     "better-sqlite3": "latest",
     "dotenv": "^17.4.2",
+    "node-edge-tts": "^1.2.10",
     "posthog-js": "^1.414.0",
     "react": "latest",
     "react-dom": "latest",

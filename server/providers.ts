@@ -571,6 +571,7 @@ export async function searchVisuals(
 
 // ---------------------------------------------------------------------------
 // Voiceover — OpenAI-compatible TTS (Speaches / Dograh-compatible)
+//            + free Edge TTS fallback for Linux / Railway / Docker
 // ---------------------------------------------------------------------------
 export async function generateVoiceover(
   text: string,
@@ -579,29 +580,48 @@ export async function generateVoiceover(
 ): Promise<{ audioUrl?: string; provider: string }> {
   const baseUrl = config.speachesApiUrl
   mkdirSync(outputDir, { recursive: true })
-  if (!baseUrl) return localMacVoiceover(text, outputDir)
+
+  // 1) Preferred: configured OpenAI-compatible TTS endpoint
+  if (baseUrl) {
+    try {
+      const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/audio/speech`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(config.dograhApiKey ? { Authorization: `Bearer ${config.dograhApiKey}` } : {}),
+        },
+        body: JSON.stringify({ model: 'tts-1', voice: 'alloy', input: text, response_format: 'mp3' }),
+      })
+      if (response.ok) {
+        const fileName = `voice-${Date.now()}.mp3`
+        const path = join(outputDir, fileName)
+        const buffer = Buffer.from(await response.arrayBuffer())
+        await import('node:fs/promises').then(fs => fs.writeFile(path, buffer))
+        return { audioUrl: `/media/${fileName}`, provider: 'speaches-openai-compatible' }
+      }
+    } catch {
+      // fall through to next provider
+    }
+  }
+
+  // 2) Free high-quality fallback: Microsoft Edge TTS (no API key, works on Linux/Docker/Railway)
   try {
-    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/audio/speech`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(config.dograhApiKey ? { Authorization: `Bearer ${config.dograhApiKey}` } : {}),
-      },
-      body: JSON.stringify({ model: 'tts-1', voice: 'alloy', input: text, response_format: 'mp3' }),
-    })
-    if (!response.ok) return localMacVoiceover(text, outputDir)
+    const { EdgeTTS } = await import('node-edge-tts')
     const fileName = `voice-${Date.now()}.mp3`
     const path = join(outputDir, fileName)
-    const buffer = Buffer.from(await response.arrayBuffer())
-    await import('node:fs/promises').then(fs => fs.writeFile(path, buffer))
-    return { audioUrl: `/media/${fileName}`, provider: 'speaches-openai-compatible' }
-  } catch (_err) {
-    return localMacVoiceover(text, outputDir)
+    const tts = new EdgeTTS({ voice: 'en-GB-SoniaNeural' })
+    await tts.ttsPromise(text, path)
+    return { audioUrl: `/media/${fileName}`, provider: 'edge-tts' }
+  } catch {
+    // fall through to local fallback
   }
+
+  // 3) Development-only macOS fallback
+  return localMacVoiceover(text, outputDir)
 }
 
 async function localMacVoiceover(text: string, outputDir: string): Promise<{ audioUrl?: string; provider: string }> {
-  // Development-only zero-cost fallback. Production should use Speaches/Dograh.
+  // Development-only zero-cost fallback. Production should use Speaches/Dograh or Edge TTS.
   if (process.platform !== 'darwin') return { provider: 'not-configured' }
   const baseName = `voice-${Date.now()}`
   const aiff = join(outputDir, `${baseName}.aiff`)
