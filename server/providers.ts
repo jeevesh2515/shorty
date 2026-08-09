@@ -1,12 +1,20 @@
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
 import { promisify } from 'node:util'
 import type { ServerConfig } from './config.js'
 import { DomainError } from './domain.js'
-import type { Analytics, CaptionCue, RenderManifest, Script, Topic, Video, VisualAsset } from './domain.js'
+import type { Analytics, CaptionCue, RenderManifest, Script, Topic, Video, VisualAsset, WordTiming } from './domain.js'
 import { buildCaptionPng, buildGradientPng } from './png.js'
+import {
+  buildAssSubtitles,
+  buildCuesFromEstimate,
+  buildCuesFromWordTimings,
+  escapeFilterPath,
+  hasAssFilter,
+  resolveCaptionFont,
+} from './captions.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -573,31 +581,113 @@ export async function searchVisuals(
 // Voiceover — OpenAI-compatible TTS (Speaches / Dograh-compatible)
 //            + free Edge TTS fallback for Linux / Railway / Docker
 // ---------------------------------------------------------------------------
+export type VoiceoverOptions = { voice?: string; rate?: string; pitch?: string }
+
+export type VoiceoverResult = {
+  audioUrl?: string
+  provider: string
+  wordTimings?: WordTiming[]
+  voice?: string
+}
+
+/**
+ * Word timings live in a sidecar JSON file beside the MP3 rather than in the database.
+ * That keeps the schema untouched and means a re-render picks the timings back up from
+ * whatever audio it finds, without threading them through every call signature.
+ */
+export function wordTimingsPath(mediaDir: string, audioUrl: string): string {
+  const fileName = audioUrl.replace(/^.*\//, '')
+  return join(mediaDir, `${fileName.replace(/\.[^.]+$/, '')}.words.json`)
+}
+
+export function readWordTimings(mediaDir: string, audioUrl?: string): WordTiming[] | undefined {
+  if (!audioUrl) return undefined
+  const path = wordTimingsPath(mediaDir, audioUrl)
+  if (!existsSync(path)) return undefined
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8'))
+    if (!Array.isArray(parsed) || !parsed.length) return undefined
+    return parsed.filter(
+      (entry): entry is WordTiming =>
+        entry && typeof entry.text === 'string'
+        && Number.isFinite(entry.start) && Number.isFinite(entry.end),
+    )
+  } catch {
+    return undefined
+  }
+}
+
 export async function generateVoiceover(
   text: string,
   config: ServerConfig,
   outputDir: string,
-): Promise<{ audioUrl?: string; provider: string }> {
+  options: VoiceoverOptions = {},
+): Promise<VoiceoverResult> {
   const baseUrl = config.speachesApiUrl
   mkdirSync(outputDir, { recursive: true })
 
-  // 1) Preferred: configured OpenAI-compatible TTS endpoint
+  const voice = options.voice || 'alloy'
+  const authHeaders = config.dograhApiKey ? { Authorization: `Bearer ${config.dograhApiKey}` } : {}
+  const payload = {
+    model: 'tts-1',
+    voice,
+    input: text,
+    response_format: 'mp3',
+    rate: options.rate || '+0%',
+    pitch: options.pitch || '+0Hz',
+  }
+
+  // 1) Preferred: timed endpoint — returns audio AND real per-word boundaries, which is
+  //    what makes captions land on the spoken word instead of an interpolated guess.
+  if (baseUrl) {
+    try {
+      const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/audio/speech/timed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify(payload),
+      })
+      if (response.ok) {
+        const data = await response.json() as {
+          audio_base64?: string
+          words?: WordTiming[]
+          voice?: string
+        }
+        if (data.audio_base64) {
+          const fileName = `voice-${Date.now()}.mp3`
+          const path = join(outputDir, fileName)
+          await writeFile(path, Buffer.from(data.audio_base64, 'base64'))
+          const wordTimings = Array.isArray(data.words) && data.words.length ? data.words : undefined
+          if (wordTimings) {
+            await writeFile(wordTimingsPath(outputDir, fileName), JSON.stringify(wordTimings))
+          }
+          return {
+            audioUrl: `/media/${fileName}`,
+            provider: 'speaches-timed',
+            wordTimings,
+            voice: data.voice || voice,
+          }
+        }
+      }
+    } catch {
+      // Older Speaches deployments have no /timed route — fall through to plain synthesis.
+    }
+  }
+
+  // 2) Plain OpenAI-compatible endpoint. Still good audio, but captions will fall back
+  //    to estimated timings.
   if (baseUrl) {
     try {
       const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/audio/speech`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(config.dograhApiKey ? { Authorization: `Bearer ${config.dograhApiKey}` } : {}),
-        },
-        body: JSON.stringify({ model: 'tts-1', voice: 'alloy', input: text, response_format: 'mp3' }),
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify(payload),
       })
       if (response.ok) {
         const fileName = `voice-${Date.now()}.mp3`
         const path = join(outputDir, fileName)
         const buffer = Buffer.from(await response.arrayBuffer())
-        await import('node:fs/promises').then(fs => fs.writeFile(path, buffer))
-        return { audioUrl: `/media/${fileName}`, provider: 'speaches-openai-compatible' }
+        await writeFile(path, buffer)
+        return { audioUrl: `/media/${fileName}`, provider: 'speaches-openai-compatible', voice }
       }
     } catch {
       // fall through to next provider
@@ -701,37 +791,69 @@ export async function renderVideo(
       await runFfmpeg(args)
       scenePaths.push(scene)
     }
-    const manifest = buildRenderManifest(script, video.renderManifest, duration, stagedSynthetic, hasVideoPlan)
+    // Real per-word boundaries from the TTS engine, written alongside the MP3.
+    const wordTimings = readWordTimings(mediaDir, video.audioUrl)
+    const manifest = buildRenderManifest(script, video.renderManifest, duration, stagedSynthetic, hasVideoPlan, wordTimings)
     const listFile = join(mediaDir, `${video.id}-scenes.txt`)
     await writeFile(listFile, scenePaths.map(path => `file '${path.replace(/'/g, "'\\''")}'`).join('\n'))
     const stitched = join(mediaDir, `${video.id}-stitched.mp4`)
     await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', stitched])
+
+    // SRT is still emitted — it is the format YouTube accepts for uploaded caption tracks.
     const captions = join(mediaDir, `${video.id}-captions.srt`)
     await writeFile(captions, toSrt(manifest.captions))
-    const captionImages: Array<{ path: string; duration: number }> = []
-    for (const [index, cue] of manifest.captions.entries()) {
-      const image = join(mediaDir, `${video.id}-caption-${index}.png`)
-      await writeFile(image, buildCaptionPng({ width: 1080, height: 1920, text: cue.text }))
-      captionImages.push({ path: image, duration: cue.endSec - cue.startSec })
-    }
-    const captionList = join(mediaDir, `${video.id}-captions.txt`)
-    const captionVideo = join(mediaDir, `${video.id}-captions.mov`)
-    const captionEntries = captionImages.flatMap(item => [`file '${item.path.replace(/'/g, "'\\''")}'`, `duration ${item.duration}`])
-    const lastCaption = captionImages.at(-1)
-    if (lastCaption) captionEntries.push(`file '${lastCaption.path.replace(/'/g, "'\\''")}'`)
-    await writeFile(captionList, captionEntries.join('\n'))
-    await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', captionList, '-r', '30', '-c:v', 'qtrle', '-pix_fmt', 'argb', captionVideo])
 
     const audioArgs: string[] = hasAudio
-      ? ['-i', localAudio as string, '-shortest']
+      ? ['-i', localAudio as string]
       : ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', String(duration)]
 
-    await runFfmpeg([
-      '-y', '-i', stitched, '-i', captionVideo, ...audioArgs,
-      '-filter_complex', '[0:v][1:v]overlay=0:0:shortest=1[v]',
-      '-map', '[v]', '-map', '2:a:0',
-      '-r', '30', '-movflags', '+faststart', '-threads', '1', output,
-    ])
+    const useAss = await hasAssFilter()
+
+    if (useAss) {
+      // Preferred path: burn captions with libass in a single filter pass.
+      //
+      // The old path rendered one full 1080x1920 PNG per cue, concatenated them into a
+      // qtrle ARGB video and overlaid that — a near-lossless full-frame alpha track
+      // costing hundreds of MB on a 30s clip. This writes a ~10KB text file instead, and
+      // gets real font shaping and per-word highlighting for free.
+      const assPath = join(mediaDir, `${video.id}-captions.ass`)
+      const { fontName, fontsDir } = resolveCaptionFont()
+      await writeFile(assPath, buildAssSubtitles(manifest.captions, { fontName }))
+      const assFilter = `ass=${escapeFilterPath(assPath)}${fontsDir ? `:fontsdir=${escapeFilterPath(fontsDir)}` : ''}`
+
+      await runFfmpeg([
+        '-y', '-i', stitched, ...audioArgs,
+        '-vf', assFilter,
+        '-map', '0:v:0', '-map', '1:a:0',
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '128k',
+        '-r', '30', '-shortest', '-movflags', '+faststart', '-threads', '1', output,
+      ])
+    } else {
+      // Legacy fallback for an ffmpeg build without libass. Kept so a base-image change
+      // degrades caption quality rather than breaking the render outright.
+      console.warn('[render] libass unavailable — falling back to PNG caption overlay')
+      const captionImages: Array<{ path: string; duration: number }> = []
+      for (const [index, cue] of manifest.captions.entries()) {
+        const image = join(mediaDir, `${video.id}-caption-${index}.png`)
+        await writeFile(image, buildCaptionPng({ width: 1080, height: 1920, text: cue.text }))
+        captionImages.push({ path: image, duration: cue.endSec - cue.startSec })
+      }
+      const captionList = join(mediaDir, `${video.id}-captions.txt`)
+      const captionVideo = join(mediaDir, `${video.id}-captions.mov`)
+      const captionEntries = captionImages.flatMap(item => [`file '${item.path.replace(/'/g, "'\\''")}'`, `duration ${item.duration}`])
+      const lastCaption = captionImages.at(-1)
+      if (lastCaption) captionEntries.push(`file '${lastCaption.path.replace(/'/g, "'\\''")}'`)
+      await writeFile(captionList, captionEntries.join('\n'))
+      await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', captionList, '-r', '30', '-c:v', 'qtrle', '-pix_fmt', 'argb', captionVideo])
+
+      await runFfmpeg([
+        '-y', '-i', stitched, '-i', captionVideo, ...audioArgs, ...(hasAudio ? ['-shortest'] : []),
+        '-filter_complex', '[0:v][1:v]overlay=0:0:shortest=1[v]',
+        '-map', '[v]', '-map', '2:a:0',
+        '-r', '30', '-movflags', '+faststart', '-threads', '1', output,
+      ])
+    }
     const thumbnail = join(mediaDir, `${video.id}-poster.jpg`)
     const contactSheet = join(mediaDir, `${video.id}-contact.jpg`)
     await runFfmpeg(['-y', '-ss', String(manifest.posterFrameSec), '-i', output, '-frames:v', '1', thumbnail])
@@ -748,23 +870,32 @@ export async function renderVideo(
     }
 }
 
-function buildRenderManifest(script: Script, existing: RenderManifest | undefined, duration: number, usesSyntheticVisuals: boolean, hasVideoPlan: boolean): RenderManifest {
-  const words = script.text.replace(/\s+/g, ' ').trim().split(' ')
-  const captions: CaptionCue[] = []
-  const wordsPerCue = 3
-  for (let index = 0; index < words.length; index += wordsPerCue) {
-    const startSec = Number((duration * index / words.length).toFixed(2))
-    const endSec = Number((duration * Math.min(index + wordsPerCue, words.length) / words.length).toFixed(2))
-    captions.push({ startSec, endSec, text: words.slice(index, index + wordsPerCue).join(' ').toUpperCase() })
-  }
+function buildRenderManifest(
+  script: Script,
+  existing: RenderManifest | undefined,
+  duration: number,
+  usesSyntheticVisuals: boolean,
+  hasVideoPlan: boolean,
+  wordTimings?: WordTiming[],
+): RenderManifest {
+  // Real boundaries always win. Measured against edge-tts output, the linear estimate
+  // below drifts up to 0.885s on a 9.6s clip because it cannot see pauses or sentence
+  // breaks — and that error grows across a full-length Short.
+  const timedCaptions = wordTimings?.length ? buildCuesFromWordTimings(wordTimings, duration) : []
+  const captions: CaptionCue[] = timedCaptions.length
+    ? timedCaptions
+    : buildCuesFromEstimate(script.text, duration)
+  const captionTiming: RenderManifest['captionTiming'] = timedCaptions.length ? 'tts-word-boundaries' : 'estimated'
+
   const sources = existing?.factualSources?.length ? existing.factualSources : script.factualSources?.length ? script.factualSources : script.text.includes('Turritopsis') ? ['https://pubmed.ncbi.nlm.nih.gov/31619459/'] : []
-  // Reuse stored captions only when their timeline still matches the render duration
-  // (within rounding tolerance). Stale timelines — whether SHORTER or LONGER than the
-  // new duration — would be cut by overlay=shortest=1 and clip or misalign the burned-in
-  // captions. Word-timed cues end exactly at `duration`, so a tight tolerance is safe.
+  // Stored captions are only reused when we have no real timings for this render AND the
+  // stored timeline still matches the duration. Stale timelines — SHORTER or LONGER — clip
+  // or misalign the burned-in captions.
   const storedLastEnd = existing?.captions?.length ? (existing.captions[existing.captions.length - 1]?.endSec ?? 0) : 0
   const storedTimelineMatches = existing?.captions?.length ? Math.abs(storedLastEnd - duration) <= 1 : false
-  const captionsForRender = storedTimelineMatches && existing?.captions ? existing.captions : captions
+  const captionsForRender = !timedCaptions.length && storedTimelineMatches && existing?.captions
+    ? existing.captions
+    : captions
   // Compliance and synthetic disclosure are recomputed from what THIS render actually
   // staged — never carried over from a previous render, or a re-render whose footage
   // download failed would keep claiming authentic provenance.
@@ -785,6 +916,7 @@ function buildRenderManifest(script: Script, existing: RenderManifest | undefine
     requiresSyntheticDisclosure: usesSyntheticVisuals,
     contactSheetUrl: existing?.contactSheetUrl,
     compliance,
+    captionTiming,
   }
 }
 
