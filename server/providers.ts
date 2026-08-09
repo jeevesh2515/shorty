@@ -730,8 +730,7 @@ export async function renderVideo(
       '-y', '-i', stitched, '-i', captionVideo, ...audioArgs,
       '-filter_complex', '[0:v][1:v]overlay=0:0:shortest=1[v]',
       '-map', '[v]', '-map', '2:a:0',
-      '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
-      '-r', '30', '-movflags', '+faststart', output,
+      '-r', '30', '-movflags', '+faststart', '-threads', '1', output,
     ])
     const thumbnail = join(mediaDir, `${video.id}-poster.jpg`)
     const contactSheet = join(mediaDir, `${video.id}-contact.jpg`)
