@@ -684,10 +684,11 @@ export async function renderVideo(
       const source = staged.path
       const scene = join(mediaDir, `${video.id}-scene-${index}.mp4`)
       const sceneFrames = Math.round(sceneDuration * 30)
-      const filter = asset.type === 'video'
+      const isActualVideo = asset.type === 'video' && !staged.synthetic
+      const filter = isActualVideo
         ? 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,eq=contrast=1.06:saturation=1.08,format=yuv420p'
         : `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(zoom+0.00065,1.16)':d=${sceneFrames}:s=1080x1920:fps=30,eq=contrast=1.06:saturation=1.08,format=yuv420p`
-      const args = asset.type === 'video'
+      const args = isActualVideo
         ? ['-y', '-stream_loop', '-1', '-i', source, '-t', String(sceneDuration), '-an', '-vf', filter, '-r', '30', scene]
         : ['-y', '-loop', '1', '-i', source, '-t', String(sceneDuration), '-an', '-vf', filter, '-r', '30', scene]
       await runFfmpeg(args)
@@ -800,7 +801,12 @@ async function stageVisualAsset(asset: VisualAsset, mediaDir: string, videoId: s
   if (!asset.path || asset.type === 'illustration') { await writeLocalFallbackImage(target, asset.role || fallbackText, index); return { path: target, synthetic: true, reason: 'no media path — generated illustration' } }
   if (/^https?:\/\//.test(asset.path)) {
     try {
-      const response = await fetch(asset.path)
+      const response = await fetch(asset.path, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': '*/*',
+        },
+      })
       if (!response.ok) throw new Error(`status ${response.status}`)
       const contentType = response.headers.get('content-type') || ''
       if (contentType.includes('text/html') || contentType.includes('application/json')) {
