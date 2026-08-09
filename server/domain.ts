@@ -17,7 +17,15 @@ export type VisualAsset = {
   endSec?: number
 }
 
-export type CaptionCue = { startSec: number; endSec: number; text: string }
+/** A single spoken word with its real start/end time, as reported by the TTS engine. */
+export type WordTiming = { text: string; start: number; end: number }
+
+/**
+ * `words` carries the per-word boundaries backing this cue, which drive karaoke-style
+ * highlighting. Optional because a cue built by the legacy linear estimate has no real
+ * timing data behind it.
+ */
+export type CaptionCue = { startSec: number; endSec: number; text: string; words?: WordTiming[] }
 
 export type RenderManifest = {
   captions: CaptionCue[]
@@ -26,6 +34,10 @@ export type RenderManifest = {
   requiresSyntheticDisclosure: boolean
   contactSheetUrl?: string
   compliance: string[]
+  /** How cue timings were derived — 'tts-word-boundaries' is accurate, 'estimated' is not. */
+  captionTiming?: 'tts-word-boundaries' | 'estimated'
+  /** Voice used, recorded so delivery can be varied and audited across uploads. */
+  voice?: string
 }
 
 export type Topic = {
