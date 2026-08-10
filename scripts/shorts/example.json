@@ -1,0 +1,26 @@
+{
+  "id": "hd189733b",
+
+  "script": "Sixty-four light-years away is a planet the same deep blue as Earth. It isn't blue because of water. Hubble measured the colour. Webb found the cause: clouds of silicate. Glass. At nearly a thousand degrees, that glass condenses and rains. Models put the winds near five thousand miles an hour. So it doesn't fall. It flies sideways. Turns out that blue is a glass storm.",
+
+  "voice": "en-GB-RyanNeural",
+  "rate": "+16%",
+  "preroll": 0.6,
+  "tail": 0.55,
+
+  "scenes": [
+    { "clip": "clips/1-approach.mp4",  "endToken": "water",    "hold": 1.95 },
+    { "clip": "clips/2-descent.mp4",   "endToken": "rains" },
+    { "clip": "clips/3-glassrain.mp4", "endToken": "sideways" },
+    { "clip": "clips/1-approach.mp4",  "reverse": true, "useTail": true }
+  ],
+
+  "music": { "file": "music/ambient-build.mp3", "start": 14, "volume": 0.32 },
+  "watermark": { "file": "../../assets/brand/watermark.png", "size": 92, "opacity": 0.9 },
+
+  "caption": { "size": 100, "accent": "5CE1FF", "marginV": 360 },
+
+  "locator": { "title": "HD 189733b", "sub": "64 LIGHT-YEARS AWAY", "from": 0.9, "to": 6.4 },
+
+  "output": "hd189733b-final.mp4"
+}
