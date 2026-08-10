@@ -17,6 +17,8 @@ REQUIRED_SECRETS.md
 
 # Internal Agent & Planning (Local Only)
 .planning/
+.agents/
+skills-lock.json
 10_MEMORY.md
 MEGA_PROMPT.md
 
