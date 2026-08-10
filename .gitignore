@@ -49,3 +49,11 @@ __pycache__/
 # Caption fonts are fetched at Docker build time (see assets/fonts/README.md)
 assets/fonts/*.ttf
 assets/fonts/OFL.txt
+
+# Short build workspace — clips, music and renders stay local
+scripts/shorts/.build-*/
+scripts/shorts/clips/
+scripts/shorts/music/
+scripts/shorts/*.mp4
+scripts/shorts/*-qc.png
+assets/brand/
