@@ -168,12 +168,19 @@ async function renderScenes(scenes: PlannedScene[], configDir: string, workDir: 
       await ff(['-y', '-i', src, '-an', '-vf', 'reverse', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', input])
     }
 
-    // Upscaled sources (Higgsfield returns 716x1284) get a touch of sharpening back.
+    // Recover what upscaling costs. How much treatment depends on how far the source has
+    // to stretch — Higgsfield returns 716x1284, some models as little as 496x864.
     const width = Number((await probe(src, 'stream=width')).split('\n')[0])
+    const upscale = 1080 / width
+    const heavy = upscale >= 1.7
     const filters = [
       scene.factor !== 1 ? `setpts=${scene.factor}*PTS` : '',
+      // Denoise BEFORE enlarging. Sharpening a heavily upscaled source without this
+      // amplifies compression blocking along with the detail.
+      heavy ? 'hqdn3d=1.5:1.2:6:6' : '',
       NORMALISE,
-      width < 1080 ? 'unsharp=5:5:0.5:5:5:0.0' : '',
+      heavy ? 'unsharp=5:5:0.9:5:5:0.0,eq=contrast=1.04:saturation=1.03'
+        : upscale > 1.05 ? 'unsharp=5:5:0.5:5:5:0.0' : '',
       'fps=30',
     ].filter(Boolean).join(',')
 
