@@ -19,6 +19,19 @@ function routePath(req: IncomingMessage) { return new URL(req.url || '/', `http:
 function serveMedia(req: IncomingMessage, res: ServerResponse, mediaDir: string, pathname: string) { const root = resolve(mediaDir); const file = resolve(join(root, decodeURIComponent(pathname.replace(/^\/media\//, '')))); if (relative(root, file).startsWith('..') || !existsSync(file) || !statSync(file).isFile()) { res.writeHead(404); res.end('Not found'); return } const types: Record<string, string> = { '.mp4': 'video/mp4', '.mp3': 'audio/mpeg', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.svg': 'image/svg+xml' }; res.writeHead(200, { 'Content-Type': types[extname(file)] || 'application/octet-stream', 'Access-Control-Allow-Origin': '*' }); createReadStream(file).pipe(res) }
 function serveStatic(res: ServerResponse, staticDir: string, pathname: string) { const root = resolve(staticDir); const requested = pathname === '/' ? '/index.html' : pathname; const file = resolve(join(root, decodeURIComponent(requested))); if (relative(root, file).startsWith('..') || !existsSync(file) || !statSync(file).isFile()) { const fallback = resolve(join(root, 'index.html')); if (existsSync(fallback)) { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); createReadStream(fallback).pipe(res); return } res.writeHead(404); res.end('Not found'); return } const types: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.ico': 'image/x-icon', '.json': 'application/json', '.woff': 'font/woff', '.woff2': 'font/woff2', '.mp4': 'video/mp4', '.mp3': 'audio/mpeg' }; res.writeHead(200, { 'Content-Type': types[extname(file)] || 'application/octet-stream' }); createReadStream(file).pipe(res) }
 
+/** Routes that remain reachable without API_TOKEN so probes and OAuth callbacks work. */
+const PUBLIC_API_PATHS = new Set([
+  '/api/health',
+  '/api/auth/youtube',
+  '/api/auth/youtube/callback',
+])
+
+function isPublicApiPath(pathname: string) {
+  if (PUBLIC_API_PATHS.has(pathname)) return true
+  // OAuth callback may include query string; pathname from URL is already clean.
+  return pathname.startsWith('/api/auth/youtube/callback')
+}
+
 async function youtubeOAuthRedirect(config: ServerConfig) {
   if (!config.youtubeClientId) throw new DomainError('PRECONDITION_FAILED', 'YouTube OAuth is not configured', 412)
   const redirectUri = config.youtubeOAuthRedirectUri || `${config.appOrigin.replace(/\/$/, '')}/api/auth/youtube/callback`
@@ -40,9 +53,21 @@ export function createHttpServer(db: ShortsDatabase, workflow: ShortsWorkflow, c
   return createServer(async (req, res) => {
     const requestOrigin = typeof req.headers.origin === 'string' ? req.headers.origin : (config.appOrigin || '*')
     try {
-      if (config.apiToken && req.url?.startsWith('/api/') && req.headers.authorization !== `Bearer ${config.apiToken}`) { send(res, 401, { ok: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, requestOrigin); return }
-      if (req.method === 'OPTIONS') { res.writeHead(204, { 'Access-Control-Allow-Origin': requestOrigin, 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS', 'Vary': 'Origin' }); res.end(); return }
       const url = routePath(req)
+
+      // Auth gate: when API_TOKEN is set, require Bearer token on all /api/* except public paths.
+      // /api/health stays public so Railway/Uptime monitors work without secrets.
+      if (
+        config.apiToken &&
+        url.pathname.startsWith('/api/') &&
+        !isPublicApiPath(url.pathname) &&
+        req.headers.authorization !== `Bearer ${config.apiToken}`
+      ) {
+        send(res, 401, { ok: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, requestOrigin)
+        return
+      }
+
+      if (req.method === 'OPTIONS') { res.writeHead(204, { 'Access-Control-Allow-Origin': requestOrigin, 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS', 'Vary': 'Origin' }); res.end(); return }
       if (url.pathname.startsWith('/media/')) { serveMedia(req, res, config.mediaDir, url.pathname); return }
       if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/media/')) { serveStatic(res, config.staticDir, url.pathname); return }
       if (req.method === 'GET' && url.pathname === '/api/health') { ok(res, { service: 'shorts-autopilot-api', status: 'ok', timestamp: new Date().toISOString() }); return }
