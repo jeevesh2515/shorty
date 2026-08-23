@@ -120,20 +120,15 @@ LLM_PROVIDER=openai      # paid ~$0.01/script
 | Pexels | https://www.pexels.com/api | 200 req/hr |
 | YouTube Data | https://console.cloud.google.com | 10,000 units/day |
 
-## Production configuration
+## 🐳 Docker Deployment
+
+Run the complete video generation pipeline, web UI dashboard, and background rendering daemon with a single command:
 
 ```bash
-cp .env.example .env
-# Set LLM_PROVIDER=groq and GROQ_API_KEY=<your key>
-npm run build
-npm run dev:api
+docker compose up --build -d
 ```
 
-Or via Docker:
-
-```bash
-docker compose up -d --build
-```
+Visit the operator dashboard at `http://localhost:8787`.
 
 Set `API_TOKEN` in production and keep all provider keys server-side only.
 **Never put provider keys in `VITE_*` variables — they will be visible in the browser.**
